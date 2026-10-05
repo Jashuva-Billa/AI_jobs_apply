@@ -1,6 +1,9 @@
 import logging
 from typing import Dict, Any, Optional
 from app.schemas.schemas import RecruiterBase
+from app.config.settings import settings
+
+from app.integrations.openai.web_research import openai_web_research
 
 logger = logging.getLogger(__name__)
 
@@ -60,12 +63,57 @@ class RecruiterDiscoveryService:
     """Discovers verifiable recruiters and talent partners without fabricating emails."""
 
     async def discover_recruiter_for_job(self, company_name: str, job_title: str) -> Optional[RecruiterBase]:
-        # 1. Check known verified directory
+        # 1. Check known verified directory first
         for key, data in KNOWN_RECRUITERS.items():
             if key.lower() in company_name.lower() or company_name.lower() in key.lower():
                 return RecruiterBase(**data)
 
-        # 2. Derive legitimate public company talent contact without guessing personal email
+        # 2. OpenAI Web Research for recruiters (Live web intelligence)
+        if not settings.DEMO_MODE and settings.OPENAI_WEB_SEARCH_ENABLED:
+            try:
+                recruiter_res = await openai_web_research.research_recruiter(company_name, job_title)
+                if recruiter_res and recruiter_res.name:
+                    logger.info(f"OpenAI Web Search discovered recruiter: {recruiter_res.name} at {company_name}")
+                    return RecruiterBase(
+                        name=recruiter_res.name,
+                        title=recruiter_res.title or "Technical Recruiter",
+                        company_name=recruiter_res.company or company_name,
+                        public_email=recruiter_res.email, # Only returned if verified from source!
+                        linkedin_url=recruiter_res.linkedin_url or f"https://www.linkedin.com/search/results/people/?keywords={company_name}+technical+recruiter",
+                        source_evidence=recruiter_res.source_url or f"OpenAI Web Research for {company_name}"
+                    )
+            except Exception as e:
+                logger.info(f"OpenAI recruiter research fallback for {company_name}: {e}")
+
+        # 3. Live Web Search for public recruiter profiles if not in demo mode
+        if not settings.DEMO_MODE:
+            try:
+                from duckduckgo_search import DDGS
+                ddgs = DDGS()
+                query = f'"{company_name}" "technical recruiter" OR "talent acquisition" site:linkedin.com/in'
+                results = list(ddgs.text(query, max_results=3))
+                if results:
+                    top_result = results[0]
+                    title_text = top_result.get("title", "")
+                    link = top_result.get("href", "")
+                    
+                    # Heuristically parse name: "Jane Doe - Technical Recruiter - Company | LinkedIn"
+                    name_parts = title_text.split(" - ") if " - " in title_text else title_text.split(" | ") if " | " in title_text else [title_text]
+                    recruiter_name = name_parts[0].replace("LinkedIn", "").strip() or f"Talent Partner at {company_name}"
+                    recruiter_title = name_parts[1].strip() if len(name_parts) > 1 else "Technical Recruiter"
+
+                    return RecruiterBase(
+                        name=recruiter_name,
+                        title=recruiter_title,
+                        company_name=company_name,
+                        public_email=None, # NEVER GUESS OR HALLUCINATE EMAILS!
+                        linkedin_url=link if "linkedin.com" in link else f"https://www.linkedin.com/search/results/people/?keywords={company_name}+technical+recruiter",
+                        source_evidence=f"Public search: {top_result.get('body', '')[:120]}"
+                    )
+            except Exception as e:
+                logger.info(f"Live recruiter search fallback for {company_name}: {e}")
+
+        # 3. Fallback verified company talent partner placeholder with direct search link
         company_clean = company_name.strip()
         return RecruiterBase(
             name=f"Talent Team at {company_clean}",

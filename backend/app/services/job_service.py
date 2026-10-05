@@ -52,7 +52,8 @@ class JobResearchService:
         raw_jobs = await web_job_search.search_jobs(
             queries=queries,
             locations=criteria.locations,
-            remote_only=criteria.remote_required
+            remote_only=criteria.remote_required,
+            criteria=criteria
         )
         total_raw = len(raw_jobs)
 

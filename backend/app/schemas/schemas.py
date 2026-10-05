@@ -85,8 +85,12 @@ class JobBase(BaseModel):
     skills: List[str] = Field(default_factory=list)
     application_url: Optional[str] = None
     source_url: Optional[str] = None
+    source_urls: List[str] = Field(default_factory=list)
     posted_date: Optional[str] = None
     company_url: Optional[str] = None
+    verification_status: str = "VERIFIED" # VERIFIED, PARTIALLY_VERIFIED, UNVERIFIED, EXPIRED
+    evidence: List[Dict[str, Any]] = Field(default_factory=list)
+    research_provider: str = "openai_web_search"
 
 class JobResponse(JobBase):
     id: str

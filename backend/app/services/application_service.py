@@ -9,16 +9,14 @@ from app.integrations.llm.provider import llm_provider
 
 logger = logging.getLogger(__name__)
 
-# Sensitive question patterns that MUST require explicit human review and approval
-SENSITIVE_PATTERNS = [
-    "salary", "compensation", "visa", "sponsorship", "authorization", "authorized to work",
-    "demographic", "race", "gender", "relocation", "criminal", "background check",
-    "disability", "veteran", "clearance"
-]
+class QuestionClassification:
+    SAFE_FACTUAL = "SAFE_FACTUAL"
+    NEEDS_USER_INPUT = "NEEDS_USER_INPUT"
+    SENSITIVE = "SENSITIVE"
 
 class ApplicationPackageService:
     """
-    Handles factual resume tailoring, cover letter generation, and safe application question answering.
+    Handles factual resume tailoring, cover letter generation, and 3-tier safe application question answering.
     """
 
     async def tailor_resume(
@@ -30,7 +28,7 @@ class ApplicationPackageService:
         company = job.get("company", "Target Company")
         job_title = job.get("title", "AI Engineer")
 
-        # Factual skill highlighting (only existing candidate skills that match)
+        # Factual skill highlighting (ONLY existing candidate skills that match)
         highlighted_skills = [s for s in candidate.skills if s in match.matched_skills]
         if not highlighted_skills:
             highlighted_skills = candidate.skills[:6]
@@ -98,50 +96,59 @@ class ApplicationPackageService:
         candidate: CandidateProfileBase,
         job: Dict[str, Any]
     ) -> List[ApplicationQuestionSchema]:
-        """Prepares answers for common application questions, flagging sensitive ones for review."""
+        """
+        Classifies and answers application questions:
+        1. SAFE_FACTUAL: years of experience, Python experience, AWS, etc.
+        2. NEEDS_USER_INPUT: salary expectations, notice period, availability.
+        3. SENSITIVE: visa sponsorship, work authorization, legal, demographic.
+        """
         sample_questions = [
-            {"q": "How many years of professional experience do you have with Python?", "sensitive": False},
-            {"q": "Have you built production RAG or Agentic LLM systems?", "sensitive": False},
-            {"q": "What are your salary expectations for this role?", "sensitive": True},
-            {"q": "What is your work authorization status?", "sensitive": True},
-            {"q": "Are you comfortable working in a remote setup from India?", "sensitive": False}
+            {"q": "How many years of professional experience do you have with Python?", "category": QuestionClassification.SAFE_FACTUAL},
+            {"q": "Have you built production RAG or Agentic LLM systems with LangGraph?", "category": QuestionClassification.SAFE_FACTUAL},
+            {"q": "What is your target compensation / salary expectation for this position?", "category": QuestionClassification.NEEDS_USER_INPUT},
+            {"q": "What is your earliest availability and notice period?", "category": QuestionClassification.NEEDS_USER_INPUT},
+            {"q": "What is your work authorization status (Visa Sponsorship / Remote Contractor)?", "category": QuestionClassification.SENSITIVE},
+            {"q": "Do you require visa sponsorship to work for this company?", "category": QuestionClassification.SENSITIVE}
         ]
 
         results = []
         for item in sample_questions:
             q_text = item["q"]
-            is_sens = item["sensitive"]
+            category = item["category"]
             
-            # Formulate safe factual answers
-            if "python" in q_text.lower():
-                answer = f"{candidate.years_of_experience} years of hands-on Python development."
-                status = "AUTO_GENERATED"
+            if category == QuestionClassification.SAFE_FACTUAL:
+                if "python" in q_text.lower():
+                    answer = f"{candidate.years_of_experience} years of hands-on Python development."
+                elif "rag" in q_text.lower() or "langgraph" in q_text.lower() or "llm" in q_text.lower():
+                    answer = "Yes, extensive experience building production Agentic LLM workflows and RAG pipelines using LangGraph and AWS."
+                else:
+                    answer = f"Yes, experienced with {', '.join(candidate.skills[:3])}."
+                status = "SAFE_FACTUAL"
+                is_sensitive = False
                 needs_input = False
-            elif "rag" in q_text.lower() or "llm" in q_text.lower():
-                answer = "Yes, built production multi-agent systems and RAG pipelines with LangGraph and AWS."
-                status = "AUTO_GENERATED"
-                needs_input = False
-            elif "remote" in q_text.lower():
-                answer = "Yes, fully equipped for remote work with high-speed internet and flexible timezone overlap."
-                status = "AUTO_GENERATED"
-                needs_input = False
-            elif "salary" in q_text.lower():
-                answer = "Negotiable / Competitive market rate based on total compensation package."
-                status = "REQUIRES_APPROVAL"
+
+            elif category == QuestionClassification.NEEDS_USER_INPUT:
+                if "salary" in q_text.lower() or "compensation" in q_text.lower():
+                    answer = "Negotiable / Competitive market rate based on role scope."
+                else:
+                    answer = "Available immediately / 2-week standard notice."
+                status = "NEEDS_USER_INPUT"
+                is_sensitive = False
                 needs_input = True
-            elif "authorization" in q_text.lower():
-                answer = candidate.work_authorization or "Authorized to work remotely from India / Global Contractor"
-                status = "REQUIRES_APPROVAL"
+
+            else: # SENSITIVE
+                if "sponsorship" in q_text.lower():
+                    answer = "No sponsorship needed for remote worldwide contractor setup."
+                else:
+                    answer = candidate.work_authorization or "Authorized for remote worldwide contract work."
+                status = "SENSITIVE"
+                is_sensitive = True
                 needs_input = True
-            else:
-                answer = "Information available upon request."
-                status = "REQUIRES_APPROVAL" if is_sens else "AUTO_GENERATED"
-                needs_input = is_sens
 
             results.append(ApplicationQuestionSchema(
                 question=q_text,
                 answer=answer,
-                is_sensitive=is_sens,
+                is_sensitive=is_sensitive,
                 needs_user_input=needs_input,
                 status=status
             ))

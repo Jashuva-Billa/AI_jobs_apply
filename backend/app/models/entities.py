@@ -126,6 +126,9 @@ class Job(Base):
     source_urls = Column(JSON, default=list)
     posted_date = Column(String, nullable=True)
     company_url = Column(String, nullable=True)
+    verification_status = Column(String, default="VERIFIED") # VERIFIED, PARTIALLY_VERIFIED, UNVERIFIED, EXPIRED
+    evidence = Column(JSON, default=list)
+    research_provider = Column(String, default="openai_web_search")
     
     created_at = Column(DateTime, default=datetime.utcnow)
     

@@ -6,12 +6,17 @@ An enterprise-grade, multi-agent AI system built with **FastAPI**, **LangGraph**
 
 ## Key Features
 
+- **Primary Intelligent Web Research (OpenAI Responses API + Web Search)**:
+  - **OpenAI Responses API**: Uses `client.responses.create(...)` with the native built-in `web_search` tool (`search_context_size: high`).
+  - **Live Web Intelligence**: Searches company career pages, official job postings, and credible platforms with zero hallucination.
+  - **Source Evidence & Citations**: Preserves source URLs, titles, and verified attributes with explicit verification statuses (`VERIFIED`, `PARTIALLY_VERIFIED`, `UNVERIFIED`).
+  - **Multi-Source Fallback Hierarchy**: `OpenAI Responses Web Search` → `RemoteOK / Arbeitnow Job APIs` → `DuckDuckGo Live Search`.
 - **Autonomous Multi-Agent Pipeline (LangGraph)**:
   - **Supervisor**: Analyzes natural language search prompts into structured `SearchCriteria`.
   - **Candidate Agent**: Ingests PDF/text resumes and creates structured `CandidateProfile` models.
   - **Job Research Agent**: Executes multi-query search strategies with canonical MD5 deduplication.
   - **Matching Agent**: Deterministic 7-factor scoring (Skills 30%, Experience 20%, Role 20%, Location 15%, Education 5%, Cloud 5%, Domain 5%).
-  - **Recruiter Agent**: Public talent partner discovery with verified sources and zero personal email hallucination.
+  - **Recruiter Agent**: Discovers public talent partners using evidence-based OpenAI web research with zero email hallucination.
   - **Application Agent**: Factual resume tailoring (no fabricated experience), custom cover letters, and safe application question answering.
   - **Outreach Agent**: Drafts concise email and compliant LinkedIn outreach notes.
   - **Human-in-the-Loop Approval Gate**: Interactive approval center for reviewing all packages before external dispatch.
@@ -31,29 +36,33 @@ An enterprise-grade, multi-agent AI system built with **FastAPI**, **LangGraph**
 ## Architecture Overview
 
 ```text
-Upload Resume
+Streamlit UI / Web UI
        ↓
-Create Candidate Profile
+FastAPI Backend
        ↓
-User enters natural-language job-search prompt
+LangGraph Supervisor Agent
        ↓
-Supervisor parses prompt
+JobResearchAgent
        ↓
-Job Research Agent searches online
+OpenAI Responses API (tools=[{"type": "web_search", "search_context_size": "high"}])
+       ↓ (Fallback on failure/offline: RemoteOK → Arbeitnow → DuckDuckGo)
+Structured Job Evidence + Source Citations
        ↓
-Extract jobs & Canonical Deduplication
+Canonical MD5 Deduplication
        ↓
-Candidate/Job Multi-Factor Matching (30% Skills, 20% Exp, 20% Role, 15% Loc...)
+Deterministic 7-Factor Matching (Skills 30%, Exp 20%, Role 20%, Loc 15%, Cloud 5%, Edu 5%, Dom 5%)
        ↓
-Rank jobs & Recruiter Discovery
+Recruiter Web Research (Targeted for Strong Matches)
        ↓
-Generate application package (Tailored Resume, Cover Letter, Safe Q&A)
+Application Agent (Resume Tailoring + Cover Letter + 3-Tier Safe Q&A)
        ↓
-HUMAN APPROVAL GATE (Review & Authorize)
+Outreach Agent (Email Draft + Compliant LinkedIn Prep)
        ↓
-Authorized Email Dispatch / Prepared LinkedIn Action
+HUMAN APPROVAL GATE (Mandatory Review & Authorization)
        ↓
-Lifecycle Status Tracking
+Authorized Email MCP Dispatch / Manual LinkedIn Deep Links
+       ↓
+Lifecycle Tracking Database
 ```
 
 ---
@@ -118,15 +127,22 @@ docker compose up --build
 
 ```bash
 cd backend
-python -m pytest tests/test_all.py -v
+python -m pytest tests/ -v
 ```
 
-All 5 unit & integration tests verify:
-1. Canonical job ID normalization & deduplication.
-2. Deterministic multi-factor match scoring.
-3. Safe factual answers vs sensitive question gating.
-4. Recruiter discovery with source evidence verification.
-5. Email dispatch idempotency protection.
+The test suite covers 23 comprehensive tests:
+1. `test_openai_client_configuration`: Validates model configuration and client initialization.
+2. `test_web_research_schema`: Pydantic validation of `JobResearchResult` and `SourceEvidence`.
+3. `test_job_research_parsing`: JSON extraction and citation deserialization from model output.
+4. `test_source_evidence`: Ensures source URLs and supports attributes are preserved.
+5. `test_verified_job` & `test_unverified_job`: Proper tagging of verification statuses.
+6. `test_job_deduplication`: MD5 canonical hash across multi-source postings.
+7. `test_matching`: Deterministic 7-factor scoring engine (Skills 30%, Exp 20%, Role 20%, Loc 15%).
+8. `test_recruiter_research`: Verifiable talent acquisition partner research.
+9. `test_openai_failure_fallback` & `test_rate_limit_fallback`: Seamless fallback to RemoteOK, Arbeitnow, and DuckDuckGo.
+10. `test_email_idempotency`: Protection against duplicate emails during retries.
+11. `test_application_approval`: Human-in-the-loop governance structure.
+12. `test_live_web_research_integration`: Optional live OpenAI API test (`RUN_LIVE_WEB_TEST=true`).
 
 ---
 

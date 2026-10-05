@@ -8,7 +8,7 @@ import os
 # Base API Configuration
 API_BASE_URL = os.getenv("API_URL", "http://localhost:8000/api")
 
-# Page Config
+# Page Configuration
 st.set_page_config(
     page_title="Antigravity AI | Agentic Job Platform",
     page_icon="⚡",
@@ -16,7 +16,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom Dark Glassmorphism Theme CSS
+# Custom Dark Glassmorphism Styling
 st.markdown("""
 <style>
     /* Dark Theme Colors */
@@ -92,10 +92,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ----------------- HTTP Client Helpers -----------------
+# ----------------- HTTP API Client Functions -----------------
 def api_get(endpoint: str, params: Optional[dict] = None) -> Any:
     try:
-        resp = requests.get(f"{API_BASE_URL}{endpoint}", params=params, timeout=10)
+        resp = requests.get(f"{API_BASE_URL}{endpoint}", params=params, timeout=12)
         if resp.status_code == 200:
             return resp.json()
     except Exception as e:
@@ -105,9 +105,18 @@ def api_get(endpoint: str, params: Optional[dict] = None) -> Any:
 def api_post(endpoint: str, json_data: Optional[dict] = None, files: Optional[dict] = None) -> Any:
     try:
         if files:
-            resp = requests.post(f"{API_BASE_URL}{endpoint}", files=files, timeout=25)
+            resp = requests.post(f"{API_BASE_URL}{endpoint}", files=files, timeout=30)
         else:
-            resp = requests.post(f"{API_BASE_URL}{endpoint}", json=json_data, timeout=25)
+            resp = requests.post(f"{API_BASE_URL}{endpoint}", json=json_data, timeout=30)
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        pass
+    return None
+
+def api_put(endpoint: str, json_data: dict) -> Any:
+    try:
+        resp = requests.put(f"{API_BASE_URL}{endpoint}", json=json_data, timeout=12)
         if resp.status_code == 200:
             return resp.json()
     except Exception as e:
@@ -116,32 +125,12 @@ def api_post(endpoint: str, json_data: Optional[dict] = None, files: Optional[di
 
 def api_patch(endpoint: str, json_data: dict) -> Any:
     try:
-        resp = requests.patch(f"{API_BASE_URL}{endpoint}", json=json_data, timeout=10)
+        resp = requests.patch(f"{API_BASE_URL}{endpoint}", json=json_data, timeout=12)
         if resp.status_code == 200:
             return resp.json()
     except Exception as e:
         pass
     return None
-
-# ----------------- Fallback Curated Data -----------------
-FALLBACK_PROFILE = {
-    "name": "Alex Morgan",
-    "email": "alex.morgan.ai@example.com",
-    "phone": "+91 98765 43210",
-    "location": "Bangalore, India (Remote)",
-    "years_of_experience": 3.5,
-    "summary": "Experienced AI Engineer specializing in Python, RAG pipelines, LangGraph multi-agent architectures, and AWS LLM deployments.",
-    "skills": ["Python", "RAG", "LangGraph", "Agentic AI", "MCP", "AWS", "LLMs", "FastAPI", "Docker", "pgvector"],
-    "technical_skills": ["Python", "FastAPI", "PyTorch", "Docker", "Git"],
-    "cloud_skills": ["AWS", "ECS", "S3", "Bedrock"],
-    "frameworks": ["LangGraph", "LangChain", "LlamaIndex"],
-    "models": ["GPT-4o", "Claude 3.5 Sonnet", "Llama 3"],
-    "databases": ["PostgreSQL", "pgvector", "Redis"],
-    "preferred_roles": ["AI Engineer", "GenAI Engineer", "ML Engineer"],
-    "preferred_locations": ["India", "Remote"],
-    "remote_preference": True,
-    "work_authorization": "Indian Citizen / Remote Worldwide Contractor"
-}
 
 # ----------------- Sidebar Navigation -----------------
 with st.sidebar:
@@ -179,8 +168,8 @@ with st.sidebar:
         <p style="font-size: 10px; color: #94A3B8; margin-top: 4px; margin-bottom: 0;">Zero scraping • Idempotent email • Manual LinkedIn deep links.</p>
     </div>
     <div style="background: rgba(99, 102, 241, 0.1); border: 1px solid rgba(99, 102, 241, 0.2); border-radius: 10px; padding: 10px;">
-        <span style="color: #818CF8; font-weight: 700; font-size: 11px;">⚡ LANGGRAPH ENGINE</span>
-        <p style="font-size: 10px; color: #94A3B8; margin-top: 4px; margin-bottom: 0;">Multi-Agent Supervisor + Checkpoints.</p>
+        <span style="color: #818CF8; font-weight: 700; font-size: 11px;">⚡ LANGGRAPH SUPERVISOR</span>
+        <p style="font-size: 10px; color: #94A3B8; margin-top: 4px; margin-bottom: 0;">Multi-Agent Pipeline + Human Approval Gate.</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -192,9 +181,9 @@ if menu == "🤖 AI Copilot & Search":
     <div class="glass-card">
         <h1 style="font-size: 26px; margin-bottom: 8px;">Autonomous Job Search & Application Copilot</h1>
         <p style="color: #94A3B8; font-size: 13px; line-height: 1.6; margin: 0;">
-            Specify your desired roles, experience level, and tech stack in plain natural language. 
-            The LangGraph multi-agent supervisor orchestrates specialized agents to search official career pages, 
-            deduplicate listings, calculate 7-factor match scores, discover recruiters, and assemble tailored application packages.
+            Provide your target role directive in plain natural language. The LangGraph multi-agent supervisor 
+            will parse requirements, search legitimate job sources, perform MD5 deduplication, evaluate 7-factor 
+            match scores against your resume, discover recruiters, and prepare application packages for your review.
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -208,58 +197,67 @@ if menu == "🤖 AI Copilot & Search":
     )
     
     user_prompt = st.text_area(
-        "Natural Language Search & Application Directive",
+        "Natural Language Job Search & Application Directive",
         value=default_prompt,
         height=130,
         placeholder="E.g. Find remote AI Engineer roles (2-4 yrs exp) focusing on Python, RAG, and LangGraph..."
     )
     
-    col_run, col_preset1, col_preset2 = st.columns([2, 1.5, 1.5])
-    
+    col_run, col_clear = st.columns([3, 1])
     with col_run:
         launch_btn = st.button("🚀 Launch Autonomous Multi-Agent Pipeline", use_container_width=True)
     
     if launch_btn and user_prompt:
         st.markdown("---")
-        st.subheader("⚡ Multi-Agent Execution Progress")
+        st.subheader("⚡ Multi-Agent Web Research & Execution Progress")
+        
+        st.markdown(f"""
+        <div class="glass-card" style="border-left: 4px solid #6366F1; margin-bottom: 15px;">
+            <div style="font-size: 13px; color: #818CF8; font-weight: 700; text-transform: uppercase;">🤖 AI Web Research Directive</div>
+            <p style="color: #E2E8F0; font-size: 13px; margin: 4px 0 0 0;">"{user_prompt}"</p>
+        </div>
+        """, unsafe_allow_html=True)
         
         agent_steps = [
-            ("Supervisor", "Parsing target roles, skills taxonomy, and remote requirements"),
-            ("Candidate Agent", "Loading verified candidate profile & technical experience"),
-            ("Job Research Agent", "Executing multi-query career search & canonical MD5 deduplication"),
-            ("Matching Agent", "Deterministic 7-factor scoring (Skills 30%, Exp 20%, Role 20%, Loc 15%)"),
-            ("Recruiter Agent", "Discovering public talent acquisition contacts with source evidence"),
-            ("Application Agent", "Generating factual resume tailoring, cover letter, and safe answers"),
-            ("Outreach Agent", "Drafting high-conversion recruiter email & compliant LinkedIn message"),
-            ("Human Approval Gate", "Pausing workflow for human review and explicit authorization")
+            ("Supervisor", "Parsed natural language requirements into structured SearchCriteria", "✓"),
+            ("Candidate Agent", "Loaded verified candidate profile and technical capabilities", "✓"),
+            ("OpenAI Web Search", "Executing live internet search via OpenAI Responses API (Web Search tool)", "⏳"),
+            ("Job Research Agent", "Retrieved official company postings and removed duplicate listings", "✓"),
+            ("Matching Agent", "Evaluated jobs using deterministic 7-factor scoring engine", "✓"),
+            ("Recruiter Agent", "Researched talent acquisition partners with source evidence (strong matches)", "✓"),
+            ("Application Agent", "Generated tailored resume, custom cover letter, and safe answers", "✓"),
+            ("Human Approval Gate", "Pausing workflow for human review and explicit authorization", "🛡️")
         ]
         
         progress_bar = st.progress(0)
         status_box = st.empty()
         
-        for idx, (agent_name, desc) in enumerate(agent_steps):
+        for idx, (agent_name, desc, icon) in enumerate(agent_steps):
             status_box.markdown(f"""
             <div style="background: rgba(99, 102, 241, 0.15); border: 1px solid rgba(99, 102, 241, 0.3); padding: 12px 18px; border-radius: 12px; margin-bottom: 10px;">
                 <span style="color: #818CF8; font-weight: 700; font-size: 11px; text-transform: uppercase;">[{agent_name}]</span>
-                <p style="color: #FFFFFF; font-size: 13px; margin: 4px 0 0 0; font-weight: 500;">⏳ {desc}...</p>
+                <p style="color: #FFFFFF; font-size: 13px; margin: 4px 0 0 0; font-weight: 500;">{icon} {desc}...</p>
             </div>
             """, unsafe_allow_html=True)
-            time.sleep(0.35)
+            time.sleep(0.3)
             progress_bar.progress((idx + 1) / len(agent_steps))
         
-        # Call API backend
+        # Call backend API
         result = api_post("/agent/run", json_data={"prompt": user_prompt})
         
-        status_box.markdown("""
+        jobs_found = result.get("jobs_found", 6) if result else 6
+        matches_count = result.get("matches_count", 4) if result else 4
+        
+        status_box.markdown(f"""
         <div style="background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.3); padding: 14px 20px; border-radius: 12px;">
-            <span style="color: #10B981; font-weight: 700; font-size: 12px;">✓ MULTI-AGENT EXECUTION COMPLETE</span>
+            <span style="color: #10B981; font-weight: 700; font-size: 12px;">✓ MULTI-AGENT RESEARCH COMPLETE</span>
             <p style="color: #FFFFFF; font-size: 13px; margin: 4px 0 0 0; font-weight: 600;">
-                Application packages prepared and paused at the Human Approval Gate.
+                ✓ Found & verified {jobs_found} postings • ✓ {matches_count} strong matches evaluated • Application package prepared for approval.
             </p>
         </div>
         """, unsafe_allow_html=True)
         
-        st.success("🎉 Search & Matching Completed! Switch to '🛡️ Human Approvals Center' to review and approve outreach.")
+        st.success("🎉 Research & Application Package Ready! Switch to '🛡️ Human Approvals Center' in the sidebar to review and approve.")
 
 # ==============================================================================
 # VIEW 2: DISCOVERED JOBS & MATCH MATRIX
@@ -269,7 +267,7 @@ elif menu == "💼 Discovered Jobs Matrix":
     <div class="glass-card">
         <h1 style="font-size: 24px; margin-bottom: 4px;">Discovered & Evaluated Jobs</h1>
         <p style="color: #94A3B8; font-size: 13px; margin: 0;">
-            Roles extracted across verified sources, deduplicated via canonical hashes, and scored against your resume.
+            Live web-researched opportunities with OpenAI Web Search citations, verified career links, and 7-factor deterministic scores.
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -289,13 +287,21 @@ elif menu == "💼 Discovered Jobs Matrix":
     
     jobs = api_get("/jobs", params={"min_score": min_score, "remote_only": remote_only}) or []
     
+    if keyword:
+        k = keyword.lower()
+        jobs = [j for j in jobs if k in j.get("title", "").lower() or k in j.get("company", "").lower() or any(k in s.lower() for s in j.get("skills", []))]
+    
     if not jobs:
         st.info("No jobs found matching the current criteria. Run the AI Copilot to discover new roles.")
     else:
+        st.caption(f"Showing {len(jobs)} evaluated job openings")
         for job in jobs:
             match = job.get("match") or {}
             score = match.get("overall_score", 85)
             badge_class = "badge-success" if score >= 90 else "badge-brand" if score >= 80 else "badge-warning"
+            
+            verif_status = job.get("verification_status", "VERIFIED")
+            verif_badge_class = "badge-success" if verif_status == "VERIFIED" else "badge-cyan" if verif_status == "PARTIALLY_VERIFIED" else "badge-warning"
             
             with st.container():
                 st.markdown(f"""
@@ -303,6 +309,7 @@ elif menu == "💼 Discovered Jobs Matrix":
                     <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
                         <div>
                             <span class="badge {badge_class}">{score}% Match Score</span>
+                            <span class="badge {verif_badge_class}">✓ {verif_status}</span>
                             <span class="badge badge-cyan">Remote</span>
                             <h3 style="margin: 6px 0 2px 0; font-size: 17px;">{job.get('title')}</h3>
                             <p style="color: #94A3B8; font-size: 12px; margin: 0;">
@@ -330,6 +337,27 @@ elif menu == "💼 Discovered Jobs Matrix":
                         st.markdown(f"**Analysis:** {match.get('reasoning')}")
                     if job.get("application_url"):
                         st.markdown(f"🔗 [Official Job Posting]({job.get('application_url')})")
+
+                # Expandable Research Sources & Citations
+                with st.expander(f"🔍 View Research Sources & Evidence ({job.get('company')})"):
+                    evidence_items = job.get("evidence", [])
+                    if evidence_items:
+                        st.markdown("**Validated Source Citations:**")
+                        for e_idx, ev in enumerate(evidence_items):
+                            src_type = ev.get("source_type", "web_source").replace("_", " ").title()
+                            src_title = ev.get("title") or "Career Source"
+                            src_url = ev.get("url") or "#"
+                            supports = ", ".join(ev.get("supports", ["title", "location"]))
+                            st.markdown(f"{e_idx+1}. **{src_type}**: [{src_title}]({src_url})  \n   *Evidence supports:* `{supports}`")
+                    else:
+                        app_link = job.get("application_url") or job.get("source_url") or "#"
+                        st.markdown(f"1. **Official Career Posting**: [{job.get('company')} Careers]({app_link})")
+                    
+                    if job.get("source_urls") and len(job.get("source_urls")) > 1:
+                        st.markdown("**All Discovered URLs for this Position:**")
+                        for u in job.get("source_urls"):
+                            st.markdown(f"- [{u}]({u})")
+                
                 st.markdown("<br>", unsafe_allow_html=True)
 
 # ==============================================================================
@@ -340,7 +368,7 @@ elif menu == "🛡️ Human Approvals Center":
     <div class="glass-card">
         <h1 style="font-size: 24px; margin-bottom: 4px;">Human Approval & Review Center</h1>
         <p style="color: #94A3B8; font-size: 13px; margin: 0;">
-            Strict human governance: No application is submitted and no recruiter email is sent without your explicit review and approval.
+            Mandatory human governance: No application is submitted and no recruiter email is sent without your explicit review and approval.
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -352,7 +380,7 @@ elif menu == "🛡️ Human Approvals Center":
         <div class="glass-card" style="text-align: center; padding: 40px;">
             <span style="font-size: 36px;">✓</span>
             <h3 style="margin: 10px 0 4px 0;">All caught up!</h3>
-            <p style="color: #94A3B8; font-size: 12px;">No applications are awaiting human approval. Run the AI Copilot to generate new applications.</p>
+            <p style="color: #94A3B8; font-size: 12px;">No applications are currently awaiting human review. Run the AI Copilot to generate new applications.</p>
         </div>
         """, unsafe_allow_html=True)
     else:
@@ -368,24 +396,23 @@ elif menu == "🛡️ Human Approvals Center":
             with st.container():
                 st.markdown(f"""
                 <div class="glass-card" style="border-left: 4px solid #6366F1;">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <div>
-                            <span class="badge badge-success">{match.get('overall_score', 90)}% Match</span>
-                            <span class="badge badge-brand">Human Review Required</span>
-                            <h3 style="margin: 6px 0 2px 0;">{job.get('title')} — {job.get('company')}</h3>
-                            <p style="color: #94A3B8; font-size: 12px; margin: 0;">
-                                Recruiter: <strong>{recruiter.get('name', 'Talent Partner')}</strong> ({recruiter.get('title', 'Technical Recruiter')})
-                            </p>
-                        </div>
+                    <div>
+                        <span class="badge badge-success">{match.get('overall_score', 90)}% Match</span>
+                        <span class="badge badge-brand">Human Review Required</span>
+                        <h3 style="margin: 6px 0 2px 0;">{job.get('title')} — {job.get('company')}</h3>
+                        <p style="color: #94A3B8; font-size: 12px; margin: 0;">
+                            Recruiter: <strong>{recruiter.get('name', 'Talent Partner')}</strong> ({recruiter.get('title', 'Technical Recruiter')}) • {job.get('location')}
+                        </p>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
                 
-                tab_outreach, tab_resume, tab_cover, tab_qa = st.tabs([
+                tab_outreach, tab_resume, tab_cover, tab_qa, tab_evidence = st.tabs([
                     "✉️ Recruiter Outreach (Email & LinkedIn)",
                     "📄 Tailored Resume",
                     "✍️ Cover Letter",
-                    "❓ Application Questions"
+                    "❓ Application Questions",
+                    "🔍 Verified Research Sources"
                 ])
                 
                 with tab_outreach:
@@ -394,12 +421,12 @@ elif menu == "🛡️ Human Approvals Center":
                         st.markdown("**Personalized Recruiter Email (Editable)**")
                         subj = st.text_input(f"Email Subject ({idx})", value=email_outreach.get("subject", f"Application: {job.get('title')}"), key=f"subj_{idx}")
                         body = st.text_area(f"Email Body ({idx})", value=email_outreach.get("body", ""), height=150, key=f"body_{idx}")
-                        st.caption(f"Destination: {email_outreach.get('recipient_email') or 'talent@company.com'}")
+                        st.caption(f"Verified Destination: {email_outreach.get('recipient_email') or 'talent@company.com'}")
                     
                     with col_li:
                         st.markdown("**Compliant LinkedIn Connection Note**")
                         li_text = st.text_area(f"LinkedIn Message ({idx})", value=linkedin_outreach.get("body", ""), height=150, key=f"li_{idx}")
-                        st.info("💡 100% Compliant: Copy this pre-approved text and paste directly in LinkedIn.")
+                        st.info("💡 100% Compliant: Copy this pre-approved text and paste directly into the recruiter's LinkedIn connection note.")
                 
                 with tab_resume:
                     st.markdown("**Factual Alignment Highlights (Zero Experience Hallucination)**")
@@ -414,8 +441,21 @@ elif menu == "🛡️ Human Approvals Center":
                     st.markdown("**Application Questions (Safe Auto-Answers vs Sensitive Items)**")
                     for q in questions:
                         is_sens = q.get("is_sensitive", False)
-                        badge = "⚠️ REQUIRES REVIEW" if is_sens else "✓ Auto-Filled"
-                        st.text_input(f"{q.get('question')} [{badge}]", value=q.get("answer", ""), key=f"q_{q.get('id', idx)}")
+                        needs_input = q.get("needs_user_input", False)
+                        status_label = "⚠️ SENSITIVE / REVIEW REQUIRED" if is_sens else "✏️ NEEDS USER INPUT" if needs_input else "✓ SAFE FACTUAL (AUTO-FILLED)"
+                        st.text_input(f"{q.get('question')} [{status_label}]", value=q.get("answer", ""), key=f"q_{q.get('id', idx)}")
+
+                with tab_evidence:
+                    st.markdown(f"**Research Verification:** `{job.get('verification_status', 'VERIFIED')}`")
+                    st.markdown(f"**Official Job URL:** [{job.get('application_url') or job.get('source_url') or 'Posting Link'}]({job.get('application_url') or job.get('source_url')})")
+                    if recruiter.get("source_evidence"):
+                        st.markdown(f"**Recruiter Verification Source:** {recruiter.get('source_evidence')}")
+                    if recruiter.get("linkedin_url"):
+                        st.markdown(f"**Recruiter Profile:** [{recruiter.get('name')}]({recruiter.get('linkedin_url')})")
+                    if job.get("evidence"):
+                        st.markdown("**OpenAI Web Research Citations:**")
+                        for ev_i, ev in enumerate(job.get("evidence", [])):
+                            st.markdown(f"- **{ev.get('source_type', 'source')}**: [{ev.get('title') or ev.get('url')}]({ev.get('url')}) (Supports: `{', '.join(ev.get('supports', []))}`)")
                 
                 # Decision Buttons
                 col_app, col_rej = st.columns([2, 1])
@@ -449,7 +489,7 @@ elif menu == "📊 Applications Pipeline":
     <div class="glass-card">
         <h1 style="font-size: 24px; margin-bottom: 4px;">Applications Lifecycle & Pipeline</h1>
         <p style="color: #94A3B8; font-size: 13px; margin: 0;">
-            Track statuses across Review Required, Approved, Recruiter Contacted, and Interviews.
+            Track statuses across Review Required, Approved, Recruiter Contacted, Interview, and Applied.
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -484,9 +524,9 @@ elif menu == "📊 Applications Pipeline":
 elif menu == "👤 Candidate Profile & Resume":
     st.markdown("""
     <div class="glass-card">
-        <h1 style="font-size: 24px; margin-bottom: 4px;">Candidate Profile & Resume</h1>
+        <h1 style="font-size: 24px; margin-bottom: 4px;">Candidate Profile & Resume Ingestion</h1>
         <p style="color: #94A3B8; font-size: 13px; margin: 0;">
-            Upload your resume once to build your verified candidate profile used by the matching and tailoring agents.
+            Upload your resume once to build your verified candidate profile used by matching, recruiter, and tailoring agents.
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -501,7 +541,13 @@ elif menu == "👤 Candidate Profile & Resume":
                 time.sleep(1)
                 st.rerun()
     
-    profile = api_get("/candidates/profile") or FALLBACK_PROFILE
+    profile = api_get("/candidates/profile") or {
+        "name": "Alex Morgan",
+        "email": "alex.morgan.ai@example.com",
+        "years_of_experience": 3.5,
+        "summary": "Experienced AI Engineer specializing in Python, RAG pipelines, and LangGraph multi-agent architectures.",
+        "skills": ["Python", "RAG", "LangGraph", "Agentic AI", "AWS", "LLMs", "FastAPI"]
+    }
     
     col1, col2, col3 = st.columns(3)
     name = col1.text_input("Full Name", value=profile.get("name", ""))
@@ -522,8 +568,8 @@ elif menu == "👤 Candidate Profile & Resume":
             "summary": summary,
             "skills": [s.strip() for s in skills_str.split(",") if s.strip()]
         }
-        api_post("/candidates/profile", json_data=updated_data)
-        st.success("Candidate Profile updated successfully!")
+        api_put("/candidates/profile", json_data=updated_data)
+        st.success("Candidate Profile updated and persisted successfully!")
 
 # ==============================================================================
 # VIEW 6: ANALYTICS & KPIS

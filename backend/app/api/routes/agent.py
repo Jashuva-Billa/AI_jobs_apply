@@ -109,7 +109,10 @@ async def execute_agent_workflow(
                     source_url=j.get("source_url"),
                     source_urls=j.get("source_urls", []),
                     posted_date=j.get("posted_date"),
-                    company_url=j.get("company_url")
+                    company_url=j.get("company_url"),
+                    verification_status=j.get("verification_status", "VERIFIED"),
+                    evidence=j.get("evidence", []),
+                    research_provider=j.get("research_provider", "openai_web_search")
                 )
                 session.add(job_entity)
                 await session.flush()

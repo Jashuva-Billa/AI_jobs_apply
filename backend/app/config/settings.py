@@ -6,14 +6,20 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api"
     ENVIRONMENT: str = "development"
     DEBUG: bool = True
+    DEMO_MODE: bool = False
     
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///./jobs_platform.db"
     
-    # LLM Settings
+    # OpenAI & LLM Configuration
     OPENAI_API_KEY: Optional[str] = None
-    LLM_MODEL: str = "gpt-4o-mini"
+    OPENAI_MODEL: str = "gpt-4o-mini"
+    LLM_MODEL: Optional[str] = None # Backward compatibility
     LLM_TEMPERATURE: float = 0.2
+    
+    # OpenAI Web Search Configuration
+    OPENAI_WEB_SEARCH_ENABLED: bool = True
+    OPENAI_WEB_SEARCH_CONTEXT_SIZE: str = "high" # low, medium, high
     
     # Observability
     LANGFUSE_PUBLIC_KEY: Optional[str] = None
@@ -52,5 +58,9 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore"
     )
+
+    @property
+    def effective_openai_model(self) -> str:
+        return self.OPENAI_MODEL or self.LLM_MODEL or "gpt-4o-mini"
 
 settings = Settings()
