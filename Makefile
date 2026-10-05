@@ -1,31 +1,25 @@
-.PHONY: install dev-backend dev-frontend dev test lint format docker-up docker-down
+.PHONY: install dev-backend dev-streamlit test docker-up docker-down
 
 install:
 	pip install -r backend/requirements.txt
-	cd frontend && npm install
 
 dev-backend:
-	cd backend && uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+	cd backend && uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 dev-streamlit:
 	streamlit run streamlit_app.py --server.port 8501
 
-dev-frontend:
-	cd frontend && npm run dev
-
 dev:
-	@echo "To run both backend and frontend concurrently:"
+	@echo "To run both backend and streamlit copilot concurrently:"
 	@echo "1. In terminal 1: make dev-backend"
-	@echo "2. In terminal 2: make dev-frontend"
+	@echo "2. In terminal 2: make dev-streamlit"
 
 test:
-	cd backend && pytest tests/test_all.py -v
-
-lint:
-	cd frontend && npm run build
+	cd backend && pytest tests/ -v
 
 docker-up:
 	docker compose up --build -d
 
 docker-down:
 	docker compose down
+

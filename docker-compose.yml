@@ -62,16 +62,6 @@ services:
     volumes:
       - .:/app
 
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: agentic_jobs_frontend
-    ports:
-      - "3000:80"
-    depends_on:
-      - backend
-
   mcp-jobs:
     build:
       context: ./backend
