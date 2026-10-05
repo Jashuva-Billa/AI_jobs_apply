@@ -1,0 +1,104 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: agentic_jobs_postgres
+    environment:
+      POSTGRES_DB: jobs_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: agentic_jobs_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: agentic_jobs_backend
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgrespassword@postgres:5432/jobs_db
+      - REDIS_URL=redis://redis:6379/0
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
+      - ENVIRONMENT=production
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ./backend:/app
+
+  streamlit:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: agentic_jobs_streamlit
+    command: streamlit run /app/../streamlit_app.py --server.port 8501 --server.address 0.0.0.0
+    environment:
+      - API_URL=http://backend:8000/api
+    ports:
+      - "8501:8501"
+    depends_on:
+      - backend
+    volumes:
+      - .:/app
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: agentic_jobs_frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+  mcp-jobs:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: agentic_mcp_jobs
+    command: python /app/../mcp-servers/jobs/server.py
+    volumes:
+      - .:/app
+
+  mcp-email:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: agentic_mcp_email
+    command: python /app/../mcp-servers/email/server.py
+    volumes:
+      - .:/app
+
+  mcp-recruiter:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: agentic_mcp_recruiter
+    command: python /app/../mcp-servers/recruiters/server.py
+    volumes:
+      - .:/app
+
+volumes:
+  postgres_data:
+  redis_data:

@@ -1,0 +1,278 @@
+from sqlalchemy import (
+    Column, String, Integer, Float, Boolean, DateTime, Text, JSON, ForeignKey, Enum as SQLEnum
+)
+from sqlalchemy.orm import relationship
+from datetime import datetime
+import uuid
+import enum
+from app.config.database import Base
+
+def generate_uuid() -> str:
+    return str(uuid.uuid4())
+
+class ApplicationStatus(str, enum.Enum):
+    DISCOVERED = "DISCOVERED"
+    MATCHED = "MATCHED"
+    REVIEW_REQUIRED = "REVIEW_REQUIRED"
+    APPROVED = "APPROVED"
+    APPLYING = "APPLYING"
+    APPLIED = "APPLIED"
+    RECRUITER_CONTACTED = "RECRUITER_CONTACTED"
+    INTERVIEW = "INTERVIEW"
+    REJECTED = "REJECTED"
+    WITHDRAWN = "WITHDRAWN"
+    FAILED = "FAILED"
+
+class ApprovalStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    MODIFIED = "MODIFIED"
+
+class CandidateProfile(Base):
+    __tablename__ = "candidate_profiles"
+    
+    id = Column(String, primary_key=True, default=generate_uuid)
+    name = Column(String, nullable=False, default="")
+    email = Column(String, nullable=False, default="")
+    phone = Column(String, nullable=True)
+    location = Column(String, nullable=True)
+    years_of_experience = Column(Float, default=0.0)
+    summary = Column(Text, nullable=True)
+    
+    # Structured JSON arrays
+    skills = Column(JSON, default=list)
+    technical_skills = Column(JSON, default=list)
+    cloud_skills = Column(JSON, default=list)
+    frameworks = Column(JSON, default=list)
+    models = Column(JSON, default=list)
+    databases = Column(JSON, default=list)
+    certifications = Column(JSON, default=list)
+    education = Column(JSON, default=list)
+    work_experience = Column(JSON, default=list)
+    projects = Column(JSON, default=list)
+    preferred_roles = Column(JSON, default=list)
+    preferred_locations = Column(JSON, default=list)
+    remote_preference = Column(Boolean, default=True)
+    work_authorization = Column(String, nullable=True)
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    resumes = relationship("Resume", back_populates="candidate", cascade="all, delete-orphan")
+    applications = relationship("Application", back_populates="candidate", cascade="all, delete-orphan")
+
+class Resume(Base):
+    __tablename__ = "resumes"
+    
+    id = Column(String, primary_key=True, default=generate_uuid)
+    candidate_id = Column(String, ForeignKey("candidate_profiles.id"), nullable=False)
+    filename = Column(String, nullable=False)
+    raw_text = Column(Text, nullable=False)
+    parsed_json = Column(JSON, default=dict)
+    file_path = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    candidate = relationship("CandidateProfile", back_populates="resumes")
+    versions = relationship("ResumeVersion", back_populates="resume", cascade="all, delete-orphan")
+
+class ResumeVersion(Base):
+    __tablename__ = "resume_versions"
+    
+    id = Column(String, primary_key=True, default=generate_uuid)
+    resume_id = Column(String, ForeignKey("resumes.id"), nullable=False)
+    job_id = Column(String, ForeignKey("jobs.id"), nullable=True)
+    version_name = Column(String, nullable=False)
+    tailored_text = Column(Text, nullable=False)
+    tailored_summary = Column(Text, nullable=True)
+    highlighted_skills = Column(JSON, default=list)
+    highlighted_projects = Column(JSON, default=list)
+    changes_made = Column(JSON, default=list)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    resume = relationship("Resume", back_populates="versions")
+
+class Company(Base):
+    __tablename__ = "companies"
+    
+    id = Column(String, primary_key=True, default=generate_uuid)
+    name = Column(String, nullable=False, unique=True)
+    website = Column(String, nullable=True)
+    careers_url = Column(String, nullable=True)
+    industry = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    jobs = relationship("Job", back_populates="company_rel")
+    recruiters = relationship("Recruiter", back_populates="company_rel")
+
+class Job(Base):
+    __tablename__ = "jobs"
+    
+    id = Column(String, primary_key=True, default=generate_uuid)
+    canonical_job_id = Column(String, index=True)
+    company_id = Column(String, ForeignKey("companies.id"), nullable=True)
+    company = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    location = Column(String, default="Remote")
+    remote = Column(Boolean, default=True)
+    employment_type = Column(String, default="Full-time")
+    experience_required = Column(String, nullable=True)
+    salary = Column(String, nullable=True)
+    description = Column(Text, nullable=False)
+    requirements = Column(JSON, default=list)
+    skills = Column(JSON, default=list)
+    application_url = Column(String, nullable=True)
+    source_url = Column(String, nullable=True)
+    source_urls = Column(JSON, default=list)
+    posted_date = Column(String, nullable=True)
+    company_url = Column(String, nullable=True)
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    company_rel = relationship("Company", back_populates="jobs")
+    matches = relationship("JobMatch", back_populates="job", cascade="all, delete-orphan")
+    applications = relationship("Application", back_populates="job", cascade="all, delete-orphan")
+
+class JobMatch(Base):
+    __tablename__ = "job_matches"
+    
+    id = Column(String, primary_key=True, default=generate_uuid)
+    job_id = Column(String, ForeignKey("jobs.id"), nullable=False)
+    candidate_id = Column(String, ForeignKey("candidate_profiles.id"), nullable=False)
+    overall_score = Column(Float, nullable=False)
+    skills_score = Column(Float, default=0.0)
+    experience_score = Column(Float, default=0.0)
+    location_score = Column(Float, default=0.0)
+    role_score = Column(Float, default=0.0)
+    matched_skills = Column(JSON, default=list)
+    missing_skills = Column(JSON, default=list)
+    concerns = Column(JSON, default=list)
+    recommendation = Column(String, default="MATCH") # STRONG_MATCH, MATCH, POSSIBLE_MATCH, REJECT
+    reasoning = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    job = relationship("Job", back_populates="matches")
+
+class Recruiter(Base):
+    __tablename__ = "recruiters"
+    
+    id = Column(String, primary_key=True, default=generate_uuid)
+    company_id = Column(String, ForeignKey("companies.id"), nullable=True)
+    name = Column(String, nullable=False)
+    title = Column(String, default="Talent Acquisition")
+    company_name = Column(String, nullable=False)
+    public_email = Column(String, nullable=True)
+    linkedin_url = Column(String, nullable=True)
+    source_evidence = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    company_rel = relationship("Company", back_populates="recruiters")
+    outreaches = relationship("OutreachMessage", back_populates="recruiter")
+
+class Application(Base):
+    __tablename__ = "applications"
+    
+    id = Column(String, primary_key=True, default=generate_uuid)
+    candidate_id = Column(String, ForeignKey("candidate_profiles.id"), nullable=False)
+    job_id = Column(String, ForeignKey("jobs.id"), nullable=False)
+    status = Column(SQLEnum(ApplicationStatus), default=ApplicationStatus.DISCOVERED)
+    idempotency_key = Column(String, unique=True, index=True)
+    applied_at = Column(DateTime, nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    candidate = relationship("CandidateProfile", back_populates="applications")
+    job = relationship("Job", back_populates="applications")
+    questions = relationship("ApplicationQuestion", back_populates="application", cascade="all, delete-orphan")
+    outreach_messages = relationship("OutreachMessage", back_populates="application", cascade="all, delete-orphan")
+    approval_requests = relationship("ApprovalRequest", back_populates="application", cascade="all, delete-orphan")
+
+class ApplicationQuestion(Base):
+    __tablename__ = "application_questions"
+    
+    id = Column(String, primary_key=True, default=generate_uuid)
+    application_id = Column(String, ForeignKey("applications.id"), nullable=False)
+    question = Column(Text, nullable=False)
+    answer = Column(Text, nullable=True)
+    is_sensitive = Column(Boolean, default=False)
+    needs_user_input = Column(Boolean, default=False)
+    status = Column(String, default="AUTO_GENERATED")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    application = relationship("Application", back_populates="questions")
+
+class OutreachMessage(Base):
+    __tablename__ = "outreach_messages"
+    
+    id = Column(String, primary_key=True, default=generate_uuid)
+    application_id = Column(String, ForeignKey("applications.id"), nullable=False)
+    recruiter_id = Column(String, ForeignKey("recruiters.id"), nullable=True)
+    channel = Column(String, default="EMAIL") # EMAIL, LINKEDIN, FOLLOW_UP
+    subject = Column(String, nullable=True)
+    body = Column(Text, nullable=False)
+    recipient_email = Column(String, nullable=True)
+    recipient_name = Column(String, nullable=True)
+    status = Column(String, default="DRAFT") # DRAFT, APPROVED, SENT, FAILED, MANUAL_REQUIRED
+    sent_at = Column(DateTime, nullable=True)
+    idempotency_key = Column(String, unique=True, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    application = relationship("Application", back_populates="outreach_messages")
+    recruiter = relationship("Recruiter", back_populates="outreaches")
+
+class ApprovalRequest(Base):
+    __tablename__ = "approval_requests"
+    
+    id = Column(String, primary_key=True, default=generate_uuid)
+    application_id = Column(String, ForeignKey("applications.id"), nullable=False)
+    status = Column(SQLEnum(ApprovalStatus), default=ApprovalStatus.PENDING)
+    action_type = Column(String, default="SUBMIT_AND_OUTREACH") # SEND_EMAIL, SUBMIT_APPLICATION, LINKEDIN_OUTREACH
+    package_data = Column(JSON, default=dict)
+    user_modifications = Column(JSON, default=dict)
+    approved_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    application = relationship("Application", back_populates="approval_requests")
+
+class AgentRun(Base):
+    __tablename__ = "agent_runs"
+    
+    id = Column(String, primary_key=True, default=generate_uuid)
+    user_prompt = Column(Text, nullable=False)
+    status = Column(String, default="RUNNING") # RUNNING, COMPLETED, PAUSED_APPROVAL, FAILED
+    current_step = Column(String, default="START")
+    summary = Column(JSON, default=dict)
+    tokens_used = Column(Integer, default=0)
+    latency_ms = Column(Float, default=0.0)
+    error_message = Column(Text, nullable=True)
+    started_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+    
+    events = relationship("AgentEvent", back_populates="run", cascade="all, delete-orphan")
+
+class AgentEvent(Base):
+    __tablename__ = "agent_events"
+    
+    id = Column(String, primary_key=True, default=generate_uuid)
+    run_id = Column(String, ForeignKey("agent_runs.id"), nullable=False)
+    agent_name = Column(String, nullable=False)
+    step = Column(String, nullable=False)
+    event_type = Column(String, default="INFO") # INFO, TOOL_CALL, TOOL_RESULT, DECISION, ERROR
+    message = Column(Text, nullable=False)
+    payload = Column(JSON, default=dict)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+    
+    run = relationship("AgentRun", back_populates="events")
+
+class OAuthConnection(Base):
+    __tablename__ = "oauth_connections"
+    
+    id = Column(String, primary_key=True, default=generate_uuid)
+    provider = Column(String, nullable=False) # google, microsoft, linkedin
+    email = Column(String, nullable=False)
+    access_token_encrypted = Column(Text, nullable=False)
+    refresh_token_encrypted = Column(Text, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
