@@ -30,42 +30,48 @@ async def seed_initial_data():
         if cnt == 0:
             logger.info("Seeding initial verified AI Engineering jobs and recruiters...")
             
-            # Default candidate
+            # Jashuva Billa Candidate Profile
             cand = CandidateProfile(
-                name="Alex Morgan",
-                email="alex.morgan.ai@example.com",
-                phone="+91 98765 43210",
-                location="Bangalore, India (Remote)",
-                years_of_experience=3.5,
-                summary="Experienced AI Engineer specializing in Python, RAG pipelines, LangGraph multi-agent architectures, and AWS LLM deployment.",
-                skills=["Python", "RAG", "LangGraph", "Agentic AI", "MCP", "AWS", "LLMs", "FastAPI", "Docker", "pgvector"],
-                technical_skills=["Python", "FastAPI", "PyTorch", "Docker", "Git"],
-                cloud_skills=["AWS", "ECS", "S3", "Bedrock"],
-                frameworks=["LangGraph", "LangChain", "LlamaIndex"],
-                models=["GPT-4o", "Claude 3.5 Sonnet", "Llama 3"],
-                databases=["PostgreSQL", "pgvector", "Redis"],
-                certifications=["AWS Certified Machine Learning Specialist"],
-                education=[{"degree": "B.Tech in Computer Science", "institution": "National Institute of Technology", "year": "2022"}],
+                name="Jashuva Billa",
+                email="jashuvabilla@gmail.com",
+                phone="+91 9618751495",
+                location="Hyderabad, India",
+                years_of_experience=2.0,
+                summary="AI Engineer specializing in Generative AI, LangGraph multi-agent orchestration, RAG pipelines, MCP tool execution, and AWS deployment.",
+                skills=[
+                    "Python", "SQL", "Generative AI", "LLMs", "RAG", "Agentic AI", "Multi-Agent Systems",
+                    "LangGraph", "LangChain", "MCP", "Milvus", "Semantic Search", "BM25", "Hybrid Retrieval",
+                    "Reciprocal Rank Fusion (RRF)", "Cross-Encoder Reranking", "Docling", "Sentence Transformers",
+                    "RAGAS", "DeepEval", "Bedrock Guardrails", "FastAPI", "PostgreSQL", "Redis", "AWS Bedrock",
+                    "EKS", "ECR", "Lambda", "Docker", "Langfuse", "OpenTelemetry"
+                ],
+                technical_skills=["Python", "SQL", "FastAPI", "Docker", "Git"],
+                cloud_skills=["AWS Bedrock", "EKS", "ECR", "Lambda", "API Gateway", "S3", "SageMaker", "CloudWatch"],
+                frameworks=["LangGraph", "LangChain", "MCP"],
+                models=["GPT-4o", "Claude 3.5 Sonnet", "Llama 3", "all-MiniLM-L6-v2", "E5"],
+                databases=["PostgreSQL", "Milvus", "Redis/ElastiCache"],
+                certifications=[],
+                education=[{"degree": "Bachelor of Technology in Computer Science", "institution": "Jawaharlal Nehru Technological University Hyderabad", "year": "2019 - 2023"}],
                 work_experience=[
                     {
-                        "title": "GenAI Systems Engineer",
-                        "company": "Cognitive Scale AI",
-                        "duration": "2023 - Present",
-                        "description": "Architected multi-agent RAG pipelines using LangGraph and AWS ECS, reducing retrieval latency by 45%.",
-                        "technologies": ["Python", "LangGraph", "RAG", "AWS", "pgvector"]
+                        "title": "AI Engineer",
+                        "company": "Innovapath IT solutions",
+                        "duration": "Feb 2024 - Present",
+                        "description": "Built enterprise GenAI and Agentic AI assistants using RAG, LangGraph orchestration, domain agents, tool calling, memory, and policy-driven execution. Designed stateful LangGraph workflows with intent routing, conditional branching, reflection loops, and checkpointing. Implemented MCP-based tool execution, hybrid RAG (Milvus + BM25 + RRF), and AWS containerized deployments.",
+                        "technologies": ["Python", "LangGraph", "RAG", "MCP", "Milvus", "FastAPI", "AWS", "Langfuse"]
                     }
                 ],
                 projects=[
                     {
-                        "name": "Enterprise Agentic Copilot",
-                        "description": "Autonomous multi-agent document analysis platform with Model Context Protocol (MCP) integrations.",
-                        "technologies": ["Python", "LangGraph", "MCP", "FastAPI"]
+                        "name": "Enterprise Agentic Copilot & Multi-Agent Orchestrator",
+                        "description": "Stateful multi-agent system coordinating triage, troubleshooting, service, billing, and policy agents through LangGraph with MCP tools.",
+                        "technologies": ["Python", "LangGraph", "MCP", "FastAPI", "Milvus", "Docker"]
                     }
                 ],
-                preferred_roles=["AI Engineer", "GenAI Engineer", "ML Engineer", "LLM Solutions Architect"],
-                preferred_locations=["India", "Remote"],
+                preferred_roles=["AI Engineer", "GenAI Engineer", "Agentic AI Engineer", "LLM Engineer", "Machine Learning Engineer"],
+                preferred_locations=["Hyderabad", "Bangalore", "Remote", "India"],
                 remote_preference=True,
-                work_authorization="Indian Citizen / Worldwide Remote Contractor"
+                work_authorization="Indian Citizen / Authorized for remote global employment"
             )
             session.add(cand)
             await session.flush()
@@ -100,7 +106,10 @@ async def seed_initial_data():
                     source_url=j_data["source_url"],
                     source_urls=[j_data["source_url"]],
                     posted_date=j_data["posted_date"],
-                    company_url=j_data["company_url"]
+                    company_url=j_data["company_url"],
+                    verification_status=j_data.get("verification_status", "VERIFIED"),
+                    evidence=j_data.get("evidence", []),
+                    research_provider="openai_web_search"
                 )
                 session.add(j_obj)
                 await session.flush()

@@ -17,16 +17,24 @@ router = APIRouter(prefix="/approvals", tags=["Approvals"])
 @router.get("")
 async def list_pending_approvals(db: AsyncSession = Depends(get_db)):
     """List all pending application packages requiring human approval."""
-    query = select(ApprovalRequest).filter_by(status=ApprovalStatus.PENDING).order_by(ApprovalRequest.created_at.desc())
+    query = select(ApprovalRequest).order_by(ApprovalRequest.created_at.desc())
     res = await db.execute(query)
     requests = res.scalars().all()
 
     packages = []
     for req in requests:
-        app = await db.get(Application, req.application_id)
+        status_val = req.status.value if hasattr(req.status, "value") else str(req.status)
+        if status_val != "PENDING":
+            continue
+
+        app_res = await db.execute(select(Application).filter_by(id=req.application_id))
+        app = app_res.scalars().first()
         if not app:
             continue
-        job = await db.get(Job, app.job_id)
+        job_res = await db.execute(select(Job).filter_by(id=app.job_id))
+        job = job_res.scalars().first()
+        if not job:
+            continue
         
         # Matches
         m_res = await db.execute(select(JobMatch).filter_by(job_id=job.id))
@@ -77,7 +85,7 @@ async def list_pending_approvals(db: AsyncSession = Depends(get_db)):
                 "linkedin_url": rec_obj.linkedin_url if rec_obj else None,
                 "source_evidence": rec_obj.source_evidence if rec_obj else None
             },
-            "package_data": req.package_data,
+            "package_data": req.package_data or {},
             "questions": [
                 {
                     "id": q.id,
@@ -101,7 +109,7 @@ async def list_pending_approvals(db: AsyncSession = Depends(get_db)):
                 "body": linkedin_outreach.body if linkedin_outreach else "",
                 "recipient_name": linkedin_outreach.recipient_name if linkedin_outreach else rec_obj.name if rec_obj else "Recruiter"
             } if linkedin_outreach else None,
-            "created_at": req.created_at
+            "created_at": req.created_at.isoformat() if req.created_at else None
         })
 
     return packages

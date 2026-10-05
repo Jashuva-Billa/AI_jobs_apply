@@ -141,8 +141,39 @@ async def execute_agent_workflow(
         # Save Selected Application and Recruiter if available
         selected_job_data = final_state.get("selected_job")
         if selected_job_data:
-            res_sel = await session.execute(select(Job).filter_by(company=selected_job_data.get("company"), title=selected_job_data.get("title")))
-            sel_job = res_sel.scalars().first()
+            sel_canon = selected_job_data.get("canonical_job_id")
+            sel_job = None
+            if sel_canon:
+                res_sel = await session.execute(select(Job).filter_by(canonical_job_id=sel_canon))
+                sel_job = res_sel.scalars().first()
+            if not sel_job:
+                res_sel = await session.execute(select(Job).filter_by(company=selected_job_data.get("company"), title=selected_job_data.get("title")))
+                sel_job = res_sel.scalars().first()
+            if not sel_job:
+                sel_job = Job(
+                    canonical_job_id=sel_canon or str(uuid.uuid4()),
+                    company=selected_job_data.get("company", "Company"),
+                    title=selected_job_data.get("title", "Role"),
+                    location=selected_job_data.get("location", "Remote"),
+                    remote=selected_job_data.get("remote", True),
+                    employment_type=selected_job_data.get("employment_type", "Full-time"),
+                    experience_required=selected_job_data.get("experience_required"),
+                    salary=selected_job_data.get("salary"),
+                    description=selected_job_data.get("description", ""),
+                    requirements=selected_job_data.get("requirements", []),
+                    skills=selected_job_data.get("skills", []),
+                    application_url=selected_job_data.get("application_url"),
+                    source_url=selected_job_data.get("source_url"),
+                    source_urls=selected_job_data.get("source_urls", []),
+                    posted_date=selected_job_data.get("posted_date"),
+                    company_url=selected_job_data.get("company_url"),
+                    verification_status=selected_job_data.get("verification_status", "VERIFIED"),
+                    evidence=selected_job_data.get("evidence", []),
+                    research_provider=selected_job_data.get("research_provider", "openai_web_search")
+                )
+                session.add(sel_job)
+                await session.flush()
+
             if sel_job:
                 # Recruiter
                 recruiter_entity = None
@@ -307,17 +338,18 @@ async def stream_agent(
         # Execute workflow and persist
         final_state = await execute_agent_workflow(run_id, request.prompt, cand_dict, db)
 
-        yield f"data: {json.dumps({
-            'event': 'complete',
-            'run_id': run_id,
-            'summary': {
-                'jobs_found': len(final_state.get('discovered_jobs', [])),
-                'strong_matches': len([j for j in final_state.get('ranked_jobs', []) if j.get('match', {}).get('overall_score', 0) >= 80]),
-                'selected_job': final_state.get('selected_job'),
-                'recruiter': final_state.get('recruiter'),
-                'approval_required': True
+        complete_payload = {
+            "event": "complete",
+            "run_id": run_id,
+            "summary": {
+                "jobs_found": len(final_state.get("discovered_jobs", [])),
+                "strong_matches": len([j for j in final_state.get("ranked_jobs", []) if j.get("match", {}).get("overall_score", 0) >= 80]),
+                "selected_job": final_state.get("selected_job"),
+                "recruiter": final_state.get("recruiter"),
+                "approval_required": True
             }
-        })}\n\n"
+        }
+        yield f"data: {json.dumps(complete_payload)}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 

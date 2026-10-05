@@ -5,6 +5,8 @@ pydantic-settings
 sqlalchemy
 aiosqlite
 asyncpg
+aiomysql
+pymysql
 python-multipart
 pypdf
 httpx

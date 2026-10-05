@@ -189,11 +189,12 @@ if menu == "🤖 AI Copilot & Search":
     """, unsafe_allow_html=True)
     
     default_prompt = (
-        "Find remote AI Engineer, GenAI Engineer, and ML Engineer positions requiring 2–4 years of experience. "
-        "Focus on Python, RAG, LangGraph, Agentic AI, MCP, AWS, and LLM roles. "
-        "Prefer companies hiring currently and roles that allow candidates to work remotely from India. "
-        "Find recruiter/contact information where publicly available. Prepare applications and personalized recruiter outreach. "
-        "Show me the application package for approval before sending."
+        "I am an AI Engineer based in Hyderabad, India with 2.9 years of experience. "
+        "Find active jobs in AI Engineer, Generative AI Engineer, Agentic AI Engineer, Applied AI Engineer, LLM Engineer, RAG Engineer, and AI Backend Engineer. "
+        "Locations: Remote India, Hyderabad remote/hybrid, and Remote-first companies hiring in India. "
+        "Focus on: Agentic AI + RAG + LangGraph + MCP + Python/FastAPI + AWS Bedrock + Milvus. "
+        "Prioritize 1-3, 2-4, 2-5, 3-5 years experience. Search company career portals directly. "
+        "Find recruiters with verified sources, prepare tailored applications, and draft personalized outreach."
     )
     
     user_prompt = st.text_area(
