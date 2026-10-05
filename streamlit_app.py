@@ -132,6 +132,61 @@ def api_patch(endpoint: str, json_data: dict) -> Any:
         pass
     return None
 
+# ----------------- Integration Status Helpers -----------------
+if "conn_sql_enabled" not in st.session_state:
+    st.session_state["conn_sql_enabled"] = True
+if "conn_email_enabled" not in st.session_state:
+    st.session_state["conn_email_enabled"] = True
+if "conn_linkedin_enabled" not in st.session_state:
+    st.session_state["conn_linkedin_enabled"] = False
+
+def check_sql_status() -> tuple[str, str]:
+    """Check live SQL database connection via backend API."""
+    try:
+        res = api_get("/jobs", {"limit": 1})
+        if res is not None:
+            return "🟢 Connected", "#10B981"
+        h_url = API_BASE_URL.replace("/api", "") + "/health"
+        resp = requests.get(h_url, timeout=3)
+        if resp.status_code == 200 and resp.json().get("status") == "healthy":
+            return "🟢 Connected", "#10B981"
+    except Exception:
+        pass
+    return "🔴 Disconnected", "#EF4444"
+
+def check_email_status() -> tuple[str, str]:
+    """Check live Email / SMTP / OAuth connection status."""
+    try:
+        auth_data = api_get("/auth/status")
+        if auth_data and isinstance(auth_data, dict):
+            google_conn = auth_data.get("google", {}).get("connected", False)
+            microsoft_conn = auth_data.get("microsoft", {}).get("connected", False)
+            if google_conn or microsoft_conn:
+                return "🟢 Connected", "#10B981"
+            return "🔴 Disconnected", "#EF4444"
+    except Exception:
+        pass
+    return "🔴 Disconnected", "#EF4444"
+
+def check_linkedin_status() -> tuple[str, str]:
+    """Check LinkedIn integration and authentication status."""
+    try:
+        auth_data = api_get("/auth/status")
+        if auth_data and isinstance(auth_data, dict):
+            linkedin = auth_data.get("linkedin", {})
+            status = linkedin.get("status", "")
+            if status == "CONNECTED":
+                return "🟢 Connected", "#10B981"
+            elif status == "COMPLIANT_MANUAL_ADAPTER":
+                return "🟡 Login Required", "#F59E0B"
+            elif status == "CONNECTING":
+                return "🟡 Connecting", "#F59E0B"
+            else:
+                return "🔴 Disconnected", "#EF4444"
+    except Exception:
+        pass
+    return "🔴 Disconnected", "#EF4444"
+
 # ----------------- Sidebar Navigation -----------------
 with st.sidebar:
     st.markdown("""
@@ -161,6 +216,78 @@ with st.sidebar:
         index=0
     )
     
+    st.markdown("---")
+    
+    # ----------------- Connections Section -----------------
+    st.markdown("""
+    <div style="margin-bottom: 12px;">
+        <span style="font-size: 11px; font-weight: 700; color: #94A3B8; letter-spacing: 0.08em; text-transform: uppercase;">
+            CONNECTIONS
+        </span>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    sql_text, sql_color = check_sql_status()
+    email_text, email_color = check_email_status()
+    linkedin_text, linkedin_color = check_linkedin_status()
+    
+    # 1. SQL Database
+    c1, c2 = st.columns([3, 2])
+    with c1:
+        st.markdown(f"""
+        <div style="line-height: 1.3; padding-top: 4px;">
+            <div style="font-size: 13px; font-weight: 600; color: #FFFFFF;">🗄️ SQL Database</div>
+            <div style="font-size: 11px; color: {sql_color}; font-weight: 500;">{sql_text}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with c2:
+        st.toggle(
+            "SQL Database",
+            key="conn_sql_enabled",
+            label_visibility="collapsed"
+        )
+        
+    st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
+    
+    # 2. Email
+    c1, c2 = st.columns([3, 2])
+    with c1:
+        st.markdown(f"""
+        <div style="line-height: 1.3; padding-top: 4px;">
+            <div style="font-size: 13px; font-weight: 600; color: #FFFFFF;">📧 Email</div>
+            <div style="font-size: 11px; color: {email_color}; font-weight: 500;">{email_text}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with c2:
+        st.toggle(
+            "Email",
+            key="conn_email_enabled",
+            label_visibility="collapsed"
+        )
+        
+    st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
+    
+    # 3. LinkedIn
+    c1, c2 = st.columns([3, 2])
+    with c1:
+        st.markdown(f"""
+        <div style="line-height: 1.3; padding-top: 4px;">
+            <div style="font-size: 13px; font-weight: 600; color: #FFFFFF;">💼 LinkedIn</div>
+            <div style="font-size: 11px; color: {linkedin_color}; font-weight: 500;">{linkedin_text}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with c2:
+        st.toggle(
+            "LinkedIn",
+            key="conn_linkedin_enabled",
+            label_visibility="collapsed"
+        )
+        
+    st.markdown("<div style='margin-bottom: 12px;'></div>", unsafe_allow_html=True)
+    
+    if st.button("🔄 Refresh Status", use_container_width=True):
+        st.rerun()
+        
     st.markdown("---")
     st.markdown("""
     <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 10px; padding: 10px; margin-bottom: 12px;">
