@@ -110,6 +110,7 @@ class Job(Base):
     
     id = Column(String(64), primary_key=True, default=generate_uuid)
     canonical_job_id = Column(String(128), index=True)
+    run_id = Column(String(64), ForeignKey("agent_runs.id"), nullable=True, index=True)
     company_id = Column(String(64), ForeignKey("companies.id"), nullable=True)
     company = Column(String(255), nullable=False)
     title = Column(String(255), nullable=False)
@@ -176,6 +177,7 @@ class Application(Base):
     __tablename__ = "applications"
     
     id = Column(String(64), primary_key=True, default=generate_uuid)
+    run_id = Column(String(64), ForeignKey("agent_runs.id"), nullable=True, index=True)
     candidate_id = Column(String(64), ForeignKey("candidate_profiles.id"), nullable=False)
     job_id = Column(String(64), ForeignKey("jobs.id"), nullable=False)
     status = Column(SQLEnum(ApplicationStatus), default=ApplicationStatus.DISCOVERED)
@@ -228,6 +230,7 @@ class ApprovalRequest(Base):
     __tablename__ = "approval_requests"
     
     id = Column(String(64), primary_key=True, default=generate_uuid)
+    run_id = Column(String(64), ForeignKey("agent_runs.id"), nullable=True, index=True)
     application_id = Column(String(64), ForeignKey("applications.id"), nullable=False)
     status = Column(SQLEnum(ApprovalStatus), default=ApprovalStatus.PENDING)
     action_type = Column(String(128), default="SUBMIT_AND_OUTREACH") # SEND_EMAIL, SUBMIT_APPLICATION, LINKEDIN_OUTREACH
@@ -242,17 +245,34 @@ class AgentRun(Base):
     __tablename__ = "agent_runs"
     
     id = Column(String(64), primary_key=True, default=generate_uuid)
+    candidate_id = Column(String(64), ForeignKey("candidate_profiles.id"), nullable=True)
     user_prompt = Column(Text, nullable=False)
-    status = Column(String(64), default="RUNNING") # RUNNING, COMPLETED, PAUSED_APPROVAL, FAILED
+    search_prompt = Column(Text, nullable=True)
+    status = Column(String(64), default="SEARCHING") # SEARCHING, MATCHING, PREPARING_APPLICATIONS, WAITING_FOR_APPROVAL, PARTIALLY_APPROVED, PROCESSING, COMPLETED, FAILED, CANCELLED
     current_step = Column(String(128), default="START")
+    
+    # Workflow & Batch Metrics
+    total_jobs = Column(Integer, default=0)
+    unique_jobs = Column(Integer, default=0)
+    qualified_jobs = Column(Integer, default=0)
+    strong_matches = Column(Integer, default=0)
+    applications_prepared = Column(Integer, default=0)
+    approvals_pending = Column(Integer, default=0)
+    applications_approved = Column(Integer, default=0)
+    applications_rejected = Column(Integer, default=0)
+    
     summary = Column(JSON, default=dict)
     tokens_used = Column(Integer, default=0)
     latency_ms = Column(Float, default=0.0)
     error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
     started_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
     
     events = relationship("AgentEvent", back_populates="run", cascade="all, delete-orphan")
+
+# Alias SearchRun to AgentRun for unified terminology
+SearchRun = AgentRun
 
 class AgentEvent(Base):
     __tablename__ = "agent_events"

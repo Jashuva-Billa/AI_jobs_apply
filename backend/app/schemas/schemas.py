@@ -178,6 +178,7 @@ class ApplicationPackage(BaseModel):
 
 class ApprovalDecisionRequest(BaseModel):
     decision: str = "APPROVE" # APPROVE, REJECT, MODIFY
+    modified_recipient_email: Optional[str] = None
     modified_email_subject: Optional[str] = None
     modified_email_body: Optional[str] = None
     modified_linkedin_body: Optional[str] = None
@@ -203,6 +204,12 @@ class ApplicationResponse(BaseModel):
     class Config:
         from_attributes = True
 
+class BulkApprovalDecisionRequest(BaseModel):
+    approval_ids: List[str] = Field(..., description="List of approval request IDs to process")
+    decision: str = Field("APPROVE", description="Decision: APPROVE or REJECT")
+    send_email: bool = Field(True, description="Whether to dispatch verified outreach email upon approval")
+    modified_answers: Optional[Dict[str, str]] = None
+
 # Agent Observability
 class AgentEventResponse(BaseModel):
     id: str
@@ -219,13 +226,24 @@ class AgentEventResponse(BaseModel):
 
 class AgentRunResponse(BaseModel):
     id: str
+    candidate_id: Optional[str] = None
     user_prompt: str
+    search_prompt: Optional[str] = None
     status: str
     current_step: str
+    total_jobs: int = 0
+    unique_jobs: int = 0
+    qualified_jobs: int = 0
+    strong_matches: int = 0
+    applications_prepared: int = 0
+    approvals_pending: int = 0
+    applications_approved: int = 0
+    applications_rejected: int = 0
     summary: Dict[str, Any] = Field(default_factory=dict)
     tokens_used: int = 0
     latency_ms: float = 0.0
     error_message: Optional[str] = None
+    created_at: Optional[datetime] = None
     started_at: datetime
     completed_at: Optional[datetime] = None
     events: List[AgentEventResponse] = Field(default_factory=list)

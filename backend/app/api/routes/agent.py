@@ -3,6 +3,7 @@ import json
 import uuid
 import asyncio
 from datetime import datetime
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,7 +25,7 @@ async def execute_agent_workflow(
     run_id: str,
     prompt: str,
     candidate_data: dict,
-    db: AsyncSession
+    db: Optional[AsyncSession] = None
 ):
     start_time = datetime.utcnow()
     initial_state: JobApplicationState = {
@@ -37,6 +38,10 @@ async def execute_agent_workflow(
         "deduplicated_jobs": [],
         "matched_jobs": [],
         "ranked_jobs": [],
+        "qualified_jobs": [],
+        "strong_matches": [],
+        "application_packages": [],
+        "recruiter_map": {},
         "selected_job": None,
         "recruiter": None,
         "application_package": None,
@@ -48,53 +53,38 @@ async def execute_agent_workflow(
         "events": []
     }
 
-    # Execute LangGraph workflow
+    # Execute LangGraph multi-agent workflow
     final_state = await job_application_graph.ainvoke(initial_state)
     end_time = datetime.utcnow()
     latency = (end_time - start_time).total_seconds() * 1000
 
-    # Persist Jobs, Matches, Recruiters, and Applications to Database
+    # Persist Jobs, Matches, Recruiters, and Application Packages in Batch
     async with AsyncSessionLocal() as session:
-        run_record = await session.get(AgentRun, run_id)
-        if run_record:
-            run_record.status = "COMPLETED"
-            run_record.current_step = final_state.get("current_step", "COMPLETED")
-            run_record.latency_ms = latency
-            run_record.completed_at = end_time
-            run_record.summary = {
-                "discovered": len(final_state.get("discovered_jobs", [])),
-                "matched": len(final_state.get("matched_jobs", [])),
-                "ranked": len(final_state.get("ranked_jobs", [])),
-                "recruiter_found": bool(final_state.get("recruiter")),
-                "approval_pending": True
-            }
-
-        # Save all event logs
-        for ev in final_state.get("events", []):
-            session.add(AgentEvent(
-                run_id=run_id,
-                agent_name=ev.get("agent_name", "Supervisor"),
-                step=ev.get("step", "general"),
-                event_type="INFO",
-                message=ev.get("message", ""),
-                payload=ev.get("payload", {})
-            ))
-
-        # Save jobs & matches
         candidate_id = candidate_data.get("id")
         if not candidate_id:
             res = await session.execute(select(CandidateProfile).limit(1))
             cand = res.scalars().first()
             candidate_id = cand.id if cand else "default_candidate"
 
-        for j in final_state.get("ranked_jobs", []):
+        # 1. Save all ranked jobs and matches with run_id in batch
+        ranked_jobs = final_state.get("ranked_jobs", [])
+        canonical_ids = [j.get("canonical_job_id") for j in ranked_jobs if j.get("canonical_job_id")]
+        existing_jobs_by_canon = {}
+        if canonical_ids:
+            res_all_jobs = await session.execute(select(Job).where(Job.canonical_job_id.in_(canonical_ids)))
+            for ej in res_all_jobs.scalars().all():
+                existing_jobs_by_canon[ej.canonical_job_id] = ej
+
+        persisted_jobs_map = {}
+        for j in ranked_jobs:
             canonical_id = j.get("canonical_job_id") or str(uuid.uuid4())
-            # Check existing job
-            res_j = await session.execute(select(Job).filter_by(canonical_job_id=canonical_id))
-            existing_job = res_j.scalars().first()
+            existing_job = existing_jobs_by_canon.get(canonical_id)
             if not existing_job:
+                job_id = str(uuid.uuid4())
                 job_entity = Job(
+                    id=job_id,
                     canonical_job_id=canonical_id,
+                    run_id=run_id,
                     company=j.get("company", "Company"),
                     title=j.get("title", "Role"),
                     location=j.get("location", "Remote"),
@@ -115,14 +105,17 @@ async def execute_agent_workflow(
                     research_provider=j.get("research_provider", "openai_web_search")
                 )
                 session.add(job_entity)
-                await session.flush()
             else:
+                existing_job.run_id = run_id
                 job_entity = existing_job
+
+            persisted_jobs_map[job_entity.company + "::" + job_entity.title] = job_entity
+            if canonical_id:
+                persisted_jobs_map[canonical_id] = job_entity
 
             # Save Match
             match_data = j.get("match", {})
-            res_m = await session.execute(select(JobMatch).filter_by(job_id=job_entity.id, candidate_id=candidate_id))
-            if not res_m.scalars().first() and match_data:
+            if match_data:
                 session.add(JobMatch(
                     job_id=job_entity.id,
                     candidate_id=candidate_id,
@@ -138,121 +131,167 @@ async def execute_agent_workflow(
                     reasoning=match_data.get("reasoning")
                 ))
 
-        # Save Selected Application and Recruiter if available
-        selected_job_data = final_state.get("selected_job")
-        if selected_job_data:
-            sel_canon = selected_job_data.get("canonical_job_id")
-            sel_job = None
-            if sel_canon:
-                res_sel = await session.execute(select(Job).filter_by(canonical_job_id=sel_canon))
-                sel_job = res_sel.scalars().first()
-            if not sel_job:
-                res_sel = await session.execute(select(Job).filter_by(company=selected_job_data.get("company"), title=selected_job_data.get("title")))
-                sel_job = res_sel.scalars().first()
-            if not sel_job:
-                sel_job = Job(
-                    canonical_job_id=sel_canon or str(uuid.uuid4()),
-                    company=selected_job_data.get("company", "Company"),
-                    title=selected_job_data.get("title", "Role"),
-                    location=selected_job_data.get("location", "Remote"),
-                    remote=selected_job_data.get("remote", True),
-                    employment_type=selected_job_data.get("employment_type", "Full-time"),
-                    experience_required=selected_job_data.get("experience_required"),
-                    salary=selected_job_data.get("salary"),
-                    description=selected_job_data.get("description", ""),
-                    requirements=selected_job_data.get("requirements", []),
-                    skills=selected_job_data.get("skills", []),
-                    application_url=selected_job_data.get("application_url"),
-                    source_url=selected_job_data.get("source_url"),
-                    source_urls=selected_job_data.get("source_urls", []),
-                    posted_date=selected_job_data.get("posted_date"),
-                    company_url=selected_job_data.get("company_url"),
-                    verification_status=selected_job_data.get("verification_status", "VERIFIED"),
-                    evidence=selected_job_data.get("evidence", []),
-                    research_provider=selected_job_data.get("research_provider", "openai_web_search")
+        # 2. Save all Application Packages and Approval Requests
+        packages = final_state.get("application_packages", [])
+        if not packages and final_state.get("application_package"):
+            packages = [final_state["application_package"]]
+
+        approvals_created_count = 0
+        for pkg in packages:
+            pkg_job_data = pkg.get("job", {})
+            canon = pkg_job_data.get("canonical_job_id")
+            lookup_key = pkg_job_data.get("company", "") + "::" + pkg_job_data.get("title", "")
+            job_obj = persisted_jobs_map.get(canon) or persisted_jobs_map.get(lookup_key)
+
+            if not job_obj:
+                job_id = str(uuid.uuid4())
+                job_obj = Job(
+                    id=job_id,
+                    canonical_job_id=canon or job_id,
+                    run_id=run_id,
+                    company=pkg_job_data.get("company", "Company"),
+                    title=pkg_job_data.get("title", "Role"),
+                    location=pkg_job_data.get("location", "Remote"),
+                    remote=pkg_job_data.get("remote", True),
+                    employment_type=pkg_job_data.get("employment_type", "Full-time"),
+                    experience_required=pkg_job_data.get("experience_required"),
+                    salary=pkg_job_data.get("salary"),
+                    description=pkg_job_data.get("description", ""),
+                    requirements=pkg_job_data.get("requirements", []),
+                    skills=pkg_job_data.get("skills", []),
+                    application_url=pkg_job_data.get("application_url"),
+                    source_url=pkg_job_data.get("source_url"),
+                    source_urls=pkg_job_data.get("source_urls", []),
+                    posted_date=pkg_job_data.get("posted_date"),
+                    company_url=pkg_job_data.get("company_url"),
+                    verification_status=pkg_job_data.get("verification_status", "VERIFIED"),
+                    evidence=pkg_job_data.get("evidence", []),
+                    research_provider=pkg_job_data.get("research_provider", "openai_web_search")
                 )
-                session.add(sel_job)
-                await session.flush()
+                session.add(job_obj)
 
-            if sel_job:
-                # Recruiter
-                recruiter_entity = None
-                recruiter_data = final_state.get("recruiter")
-                if recruiter_data:
-                    res_rec = await session.execute(select(Recruiter).filter_by(company_name=recruiter_data.get("company_name")))
-                    recruiter_entity = res_rec.scalars().first()
-                    if not recruiter_entity:
-                        recruiter_entity = Recruiter(
-                            name=recruiter_data.get("name", "Recruiter"),
-                            title=recruiter_data.get("title", "Recruiter"),
-                            company_name=recruiter_data.get("company_name", sel_job.company),
-                            public_email=recruiter_data.get("public_email"),
-                            linkedin_url=recruiter_data.get("linkedin_url"),
-                            source_evidence=recruiter_data.get("source_evidence")
-                        )
-                        session.add(recruiter_entity)
-                        await session.flush()
+            # Save Recruiter if present
+            rec_data = pkg.get("recruiter")
+            recruiter_obj = None
+            if rec_data:
+                rec_id = str(uuid.uuid4())
+                recruiter_obj = Recruiter(
+                    id=rec_id,
+                    name=rec_data.get("name", "Talent Acquisition Team"),
+                    title=rec_data.get("title", "Technical Recruiter"),
+                    company_name=rec_data.get("company_name", job_obj.company),
+                    public_email=rec_data.get("public_email"),
+                    linkedin_url=rec_data.get("linkedin_url"),
+                    source_evidence=rec_data.get("source_evidence")
+                )
+                session.add(recruiter_obj)
 
-                # Application record
-                idempotency_key = f"{candidate_id}_{sel_job.id}_apply"
-                res_app = await session.execute(select(Application).filter_by(idempotency_key=idempotency_key))
-                app_entity = res_app.scalars().first()
-                if not app_entity:
-                    app_entity = Application(
-                        candidate_id=candidate_id,
-                        job_id=sel_job.id,
-                        status=ApplicationStatus.REVIEW_REQUIRED,
-                        idempotency_key=idempotency_key,
-                        notes=f"Prepared application package for {sel_job.company}"
-                    )
-                    session.add(app_entity)
-                    await session.flush()
+            # Save Application
+            app_id = str(uuid.uuid4())
+            app_idempotency_key = f"{candidate_id}_{job_obj.id}_apply"
+            app_entity = Application(
+                id=app_id,
+                run_id=run_id,
+                candidate_id=candidate_id,
+                job_id=job_obj.id,
+                status=ApplicationStatus.REVIEW_REQUIRED,
+                idempotency_key=app_idempotency_key,
+                notes=f"Prepared application package for {job_obj.company}"
+            )
+            session.add(app_entity)
 
-                    # Save questions
-                    pkg = final_state.get("application_package", {})
-                    for q in pkg.get("questions", []):
-                        session.add(ApplicationQuestion(
-                            application_id=app_entity.id,
-                            question=q.get("question", ""),
-                            answer=q.get("answer", ""),
-                            is_sensitive=q.get("is_sensitive", False),
-                            needs_user_input=q.get("needs_user_input", False),
-                            status=q.get("status", "AUTO_GENERATED")
-                        ))
+            # Save Questions
+            for q in pkg.get("questions", []):
+                session.add(ApplicationQuestion(
+                    application_id=app_entity.id,
+                    question=q.get("question", ""),
+                    answer=q.get("answer", ""),
+                    is_sensitive=q.get("is_sensitive", False),
+                    needs_user_input=q.get("needs_user_input", False),
+                    status=q.get("status", "AUTO_GENERATED")
+                ))
 
-                    # Save Outreach drafts
-                    outreach_data = final_state.get("outreach", {})
-                    if outreach_data.get("email"):
-                        em = outreach_data["email"]
-                        session.add(OutreachMessage(
-                            application_id=app_entity.id,
-                            recruiter_id=recruiter_entity.id if recruiter_entity else None,
-                            channel="EMAIL",
-                            subject=em.get("subject"),
-                            body=em.get("body", ""),
-                            recipient_email=em.get("recipient_email"),
-                            recipient_name=em.get("recipient_name"),
-                            status="DRAFT"
-                        ))
-                    if outreach_data.get("linkedin"):
-                        li = outreach_data["linkedin"]
-                        session.add(OutreachMessage(
-                            application_id=app_entity.id,
-                            recruiter_id=recruiter_entity.id if recruiter_entity else None,
-                            channel="LINKEDIN",
-                            subject=li.get("subject"),
-                            body=li.get("body", ""),
-                            recipient_name=li.get("recipient_name"),
-                            status="MANUAL_REQUIRED"
-                        ))
+            # Save Outreach Messages
+            em_outreach = pkg.get("email_outreach")
+            if em_outreach:
+                session.add(OutreachMessage(
+                    application_id=app_entity.id,
+                    recruiter_id=recruiter_obj.id if recruiter_obj else None,
+                    channel="EMAIL",
+                    subject=em_outreach.get("subject"),
+                    body=em_outreach.get("body", ""),
+                    recipient_email=em_outreach.get("recipient_email") or (recruiter_obj.public_email if recruiter_obj else None),
+                    recipient_name=em_outreach.get("recipient_name") or (recruiter_obj.name if recruiter_obj else "Hiring Team"),
+                    status="DRAFT",
+                    idempotency_key=f"{candidate_id}_{job_obj.id}_email_outreach"
+                ))
 
-                    # Save Approval Request
-                    session.add(ApprovalRequest(
-                        application_id=app_entity.id,
-                        status=ApprovalStatus.PENDING,
-                        action_type="SUBMIT_AND_OUTREACH",
-                        package_data=pkg
-                    ))
+            li_outreach = pkg.get("linkedin_outreach")
+            if li_outreach:
+                session.add(OutreachMessage(
+                    application_id=app_entity.id,
+                    recruiter_id=recruiter_obj.id if recruiter_obj else None,
+                    channel="LINKEDIN",
+                    subject=li_outreach.get("subject"),
+                    body=li_outreach.get("body", ""),
+                    recipient_name=li_outreach.get("recipient_name") or (recruiter_obj.name if recruiter_obj else "Hiring Team"),
+                    status="MANUAL_REQUIRED",
+                    idempotency_key=f"{candidate_id}_{job_obj.id}_linkedin_outreach"
+                ))
+
+            # Save Approval Request
+            session.add(ApprovalRequest(
+                run_id=run_id,
+                application_id=app_entity.id,
+                status=ApprovalStatus.PENDING,
+                action_type="SUBMIT_AND_OUTREACH",
+                package_data=pkg
+            ))
+            approvals_created_count += 1
+
+        # 3. Update AgentRun Record with Batch Stats
+        run_record = await session.get(AgentRun, run_id)
+        if run_record:
+            total_j = len(final_state.get("discovered_jobs", []))
+            unique_j = len(final_state.get("deduplicated_jobs", []))
+            qual_j = len(final_state.get("qualified_jobs", []))
+            strong_j = len(final_state.get("strong_matches", []))
+            apps_prep = len(packages)
+
+            run_record.candidate_id = candidate_id
+            run_record.search_prompt = prompt
+            run_record.status = "WAITING_FOR_APPROVAL" if approvals_created_count > 0 else "COMPLETED"
+            run_record.current_step = "human_approval_gate" if approvals_created_count > 0 else "COMPLETED"
+            run_record.total_jobs = total_j
+            run_record.unique_jobs = unique_j
+            run_record.qualified_jobs = qual_j
+            run_record.strong_matches = strong_j
+            run_record.applications_prepared = apps_prep
+            run_record.approvals_pending = approvals_created_count
+            run_record.applications_approved = 0
+            run_record.applications_rejected = 0
+            run_record.latency_ms = latency
+            run_record.completed_at = end_time
+            run_record.summary = {
+                "discovered": total_j,
+                "unique": unique_j,
+                "qualified": qual_j,
+                "strong_matches": strong_j,
+                "applications_prepared": apps_prep,
+                "approvals_pending": approvals_created_count,
+                "approval_required": bool(approvals_created_count > 0)
+            }
+
+        # 4. Save Event Logs
+        for ev in final_state.get("events", []):
+            session.add(AgentEvent(
+                run_id=run_id,
+                agent_name=ev.get("agent_name", "Supervisor"),
+                step=ev.get("step", "general"),
+                event_type="INFO",
+                message=ev.get("message", ""),
+                payload=ev.get("payload", {})
+            ))
 
         await session.commit()
     return final_state
@@ -262,8 +301,7 @@ async def run_agent(
     request: AgentPromptRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    """Trigger the multi-agent job search, matching, and application preparation workflow."""
-    # Get candidate profile
+    """Trigger the multi-agent job search, matching, and batch application preparation workflow."""
     cand_res = await db.execute(select(CandidateProfile).limit(1))
     cand = cand_res.scalars().first()
     cand_dict = {c.name: getattr(cand, c.name) for c in cand.__table__.columns} if cand else {}
@@ -271,20 +309,29 @@ async def run_agent(
     run_id = str(uuid.uuid4())
     run_record = AgentRun(
         id=run_id,
+        candidate_id=cand.id if cand else None,
         user_prompt=request.prompt,
-        status="RUNNING",
+        search_prompt=request.prompt,
+        status="SEARCHING",
         current_step="parse_prompt"
     )
     db.add(run_record)
     await db.commit()
 
-    # Run workflow
-    final_state = await execute_agent_workflow(run_id, request.prompt, cand_dict, db)
+    # Run complete multi-agent workflow
+    final_state = await execute_agent_workflow(run_id, request.prompt, cand_dict)
+
+    # Refresh updated run record from database
+    await db.refresh(run_record)
     return {
         "run_id": run_id,
-        "status": "COMPLETED",
-        "jobs_found": len(final_state.get("discovered_jobs", [])),
-        "matches_count": len(final_state.get("matched_jobs", [])),
+        "status": run_record.status or "WAITING_FOR_APPROVAL",
+        "total_jobs": run_record.total_jobs or len(final_state.get("discovered_jobs", [])),
+        "unique_jobs": run_record.unique_jobs or len(final_state.get("deduplicated_jobs", [])),
+        "qualified_jobs": run_record.qualified_jobs or len(final_state.get("qualified_jobs", [])),
+        "strong_matches": run_record.strong_matches or len(final_state.get("strong_matches", [])),
+        "applications_prepared": run_record.applications_prepared or len(final_state.get("application_packages", [])),
+        "approvals_pending": run_record.approvals_pending or len(final_state.get("application_packages", [])),
         "selected_job": final_state.get("selected_job"),
         "recruiter": final_state.get("recruiter"),
         "approval_required": True,
@@ -297,7 +344,6 @@ async def stream_agent(
     db: AsyncSession = Depends(get_db)
 ):
     """Stream real-time agent execution events and reasoning using Server-Sent Events (SSE)."""
-    # Fetch candidate
     cand_res = await db.execute(select(CandidateProfile).limit(1))
     cand = cand_res.scalars().first()
     cand_dict = {c.name: getattr(cand, c.name) for c in cand.__table__.columns} if cand else {}
@@ -305,8 +351,10 @@ async def stream_agent(
     run_id = str(uuid.uuid4())
     run_record = AgentRun(
         id=run_id,
+        candidate_id=cand.id if cand else None,
         user_prompt=request.prompt,
-        status="RUNNING",
+        search_prompt=request.prompt,
+        status="SEARCHING",
         current_step="START"
     )
     db.add(run_record)
@@ -314,36 +362,34 @@ async def stream_agent(
 
     async def event_generator():
         yield f"data: {json.dumps({'event': 'start', 'run_id': run_id, 'message': 'Agent initialized. Analyzing your search prompt...'})}\n\n"
+        await asyncio.sleep(0.2)
+
+        yield f"data: {json.dumps({'event': 'step', 'step': 'parse_prompt', 'agent': 'Supervisor', 'message': 'Parsing target roles, skills, and remote requirements...'})}\n\n"
         await asyncio.sleep(0.3)
 
-        # Step 1: Parse Prompt
-        yield f"data: {json.dumps({'event': 'step', 'step': 'parse_prompt', 'agent': 'Supervisor', 'message': 'Parsing target roles, skills, and remote requirements...'})}\n\n"
-        await asyncio.sleep(0.4)
+        yield f"data: {json.dumps({'event': 'step', 'step': 'search_jobs', 'agent': 'JobResearchAgent', 'message': 'Executing multi-source search across verified company portals and web APIs...'})}\n\n"
+        await asyncio.sleep(0.3)
 
-        # Step 2: Search jobs
-        yield f"data: {json.dumps({'event': 'step', 'step': 'search_jobs', 'agent': 'JobResearchAgent', 'message': 'Executing multi-query search across verified company portals and career APIs...'})}\n\n"
-        await asyncio.sleep(0.6)
-
-        # Step 3: Match jobs
         yield f"data: {json.dumps({'event': 'step', 'step': 'match_jobs', 'agent': 'MatchingAgent', 'message': 'Evaluating deterministic skills (30%), experience (20%), and role alignment (20%)...'})}\n\n"
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.3)
 
-        # Step 4: Recruiter discovery
-        yield f"data: {json.dumps({'event': 'step', 'step': 'discover_recruiters', 'agent': 'RecruiterAgent', 'message': 'Discovering public talent acquisition partners and verified LinkedIn directories...'})}\n\n"
-        await asyncio.sleep(0.4)
-
-        # Step 5: Application Package & Outreach
-        yield f"data: {json.dumps({'event': 'step', 'step': 'prepare_application', 'agent': 'ApplicationAgent', 'message': 'Generating factual resume tailoring, cover letter, and personalized recruiter outreach...'})}\n\n"
+        yield f"data: {json.dumps({'event': 'step', 'step': 'prepare_application', 'agent': 'ApplicationAgent', 'message': 'Generating factual resume tailoring, cover letters, and personalized outreach in batch...'})}\n\n"
         
         # Execute workflow and persist
         final_state = await execute_agent_workflow(run_id, request.prompt, cand_dict, db)
 
+        db_run = await db.get(AgentRun, run_id)
         complete_payload = {
             "event": "complete",
             "run_id": run_id,
             "summary": {
-                "jobs_found": len(final_state.get("discovered_jobs", [])),
-                "strong_matches": len([j for j in final_state.get("ranked_jobs", []) if j.get("match", {}).get("overall_score", 0) >= 80]),
+                "status": db_run.status if db_run else "WAITING_FOR_APPROVAL",
+                "jobs_found": db_run.total_jobs if db_run else len(final_state.get("discovered_jobs", [])),
+                "unique_jobs": db_run.unique_jobs if db_run else len(final_state.get("deduplicated_jobs", [])),
+                "qualified_jobs": db_run.qualified_jobs if db_run else len(final_state.get("qualified_jobs", [])),
+                "strong_matches": db_run.strong_matches if db_run else len(final_state.get("strong_matches", [])),
+                "applications_prepared": db_run.applications_prepared if db_run else len(final_state.get("application_packages", [])),
+                "approvals_pending": db_run.approvals_pending if db_run else len(final_state.get("application_packages", [])),
                 "selected_job": final_state.get("selected_job"),
                 "recruiter": final_state.get("recruiter"),
                 "approval_required": True
@@ -353,9 +399,61 @@ async def stream_agent(
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
+@router.get("/runs/latest")
+async def get_latest_agent_run(
+    candidate_id: Optional[str] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    """Fetch the most recent agent search run for automatic state restoration."""
+    query = select(AgentRun).order_by(AgentRun.created_at.desc()).limit(1)
+    if candidate_id:
+        query = select(AgentRun).filter_by(candidate_id=candidate_id).order_by(AgentRun.created_at.desc()).limit(1)
+    
+    res = await db.execute(query)
+    run = res.scalars().first()
+    if not run:
+        return None
+
+    events_res = await db.execute(select(AgentEvent).filter_by(run_id=run.id).order_by(AgentEvent.timestamp.asc()))
+    events = events_res.scalars().all()
+
+    return {
+        "id": run.id,
+        "run_id": run.id,
+        "candidate_id": run.candidate_id,
+        "user_prompt": run.user_prompt,
+        "search_prompt": run.search_prompt or run.user_prompt,
+        "status": run.status,
+        "current_step": run.current_step,
+        "total_jobs": run.total_jobs,
+        "unique_jobs": run.unique_jobs,
+        "qualified_jobs": run.qualified_jobs,
+        "strong_matches": run.strong_matches,
+        "applications_prepared": run.applications_prepared,
+        "approvals_pending": run.approvals_pending,
+        "applications_approved": run.applications_approved,
+        "applications_rejected": run.applications_rejected,
+        "summary": run.summary,
+        "latency_ms": run.latency_ms,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "events": [
+            {
+                "id": ev.id,
+                "agent_name": ev.agent_name,
+                "step": ev.step,
+                "message": ev.message,
+                "payload": ev.payload,
+                "timestamp": ev.timestamp.isoformat() if ev.timestamp else None
+            }
+            for ev in events
+        ]
+    }
+
 @router.get("/runs/{run_id}")
 async def get_agent_run(run_id: str, db: AsyncSession = Depends(get_db)):
-    """Fetch run status and full event traces for observability."""
+    """Fetch run status, metrics, and full event traces for observability."""
     res = await db.execute(select(AgentRun).filter_by(id=run_id))
     run = res.scalars().first()
     if not run:
@@ -366,13 +464,25 @@ async def get_agent_run(run_id: str, db: AsyncSession = Depends(get_db)):
 
     return {
         "id": run.id,
+        "run_id": run.id,
+        "candidate_id": run.candidate_id,
         "user_prompt": run.user_prompt,
+        "search_prompt": run.search_prompt or run.user_prompt,
         "status": run.status,
         "current_step": run.current_step,
+        "total_jobs": run.total_jobs,
+        "unique_jobs": run.unique_jobs,
+        "qualified_jobs": run.qualified_jobs,
+        "strong_matches": run.strong_matches,
+        "applications_prepared": run.applications_prepared,
+        "approvals_pending": run.approvals_pending,
+        "applications_approved": run.applications_approved,
+        "applications_rejected": run.applications_rejected,
         "summary": run.summary,
         "latency_ms": run.latency_ms,
-        "started_at": run.started_at,
-        "completed_at": run.completed_at,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
         "events": [
             {
                 "id": ev.id,
@@ -380,7 +490,7 @@ async def get_agent_run(run_id: str, db: AsyncSession = Depends(get_db)):
                 "step": ev.step,
                 "message": ev.message,
                 "payload": ev.payload,
-                "timestamp": ev.timestamp
+                "timestamp": ev.timestamp.isoformat() if ev.timestamp else None
             }
             for ev in events
         ]

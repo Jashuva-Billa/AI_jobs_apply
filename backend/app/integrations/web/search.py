@@ -327,7 +327,7 @@ class MultiSourceJobSearchEngine:
             except Exception as e:
                 logger.warning(f"Primary OpenAI Web Search provider failed: {e}")
 
-        # 2. If OpenAI returned insufficient results or was skipped, query fallback providers
+        # 2. If OpenAI returned insufficient results or was skipped, query fallback live providers
         if len(all_results) < 4:
             logger.info("Querying auxiliary live job providers (RemoteOK, Arbeitnow, DuckDuckGo)...")
             api_jobs = await self.api_provider.search(queries, locations, remote_only)
@@ -336,11 +336,12 @@ class MultiSourceJobSearchEngine:
             web_jobs = await self.web_provider.search(queries, locations, remote_only)
             all_results.extend(web_jobs)
 
-            # Ensure high-quality verified baseline jobs are also included
-            for job in CURATED_AI_JOBS:
-                job_text = f"{job['title']} {job['description']} {' '.join(job['skills'])}".lower()
-                if any(q.lower() in job_text for q in queries) or not queries:
-                    all_results.append(job.copy())
+            # Only add curated jobs if explicitly in demo mode
+            if settings.DEMO_MODE:
+                for job in CURATED_AI_JOBS:
+                    job_text = f"{job['title']} {job['description']} {' '.join(job['skills'])}".lower()
+                    if any(q.lower() in job_text for q in queries) or not queries:
+                        all_results.append(job.copy())
 
         return all_results
 

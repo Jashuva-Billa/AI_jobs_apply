@@ -77,6 +77,7 @@ st.markdown("""
     .badge-success { background: rgba(16, 185, 129, 0.2); color: #6EE7B7; border: 1px solid rgba(16, 185, 129, 0.3); }
     .badge-cyan { background: rgba(6, 182, 212, 0.2); color: #67E8F9; border: 1px solid rgba(6, 182, 212, 0.3); }
     .badge-warning { background: rgba(245, 158, 11, 0.2); color: #FCD34D; border: 1px solid rgba(245, 158, 11, 0.3); }
+    .badge-danger { background: rgba(239, 68, 68, 0.2); color: #FCA5A5; border: 1px solid rgba(239, 68, 68, 0.3); }
     
     /* Buttons */
     .stButton > button {
@@ -102,19 +103,19 @@ def api_get(endpoint: str, params: Optional[dict] = None) -> Any:
         resp = requests.get(f"{API_BASE_URL}{endpoint}", params=params, timeout=12)
         if resp.status_code == 200:
             return resp.json()
-    except Exception as e:
+    except Exception:
         pass
     return None
 
 def api_post(endpoint: str, json_data: Optional[dict] = None, files: Optional[dict] = None) -> Any:
     try:
         if files:
-            resp = requests.post(f"{API_BASE_URL}{endpoint}", files=files, timeout=30)
+            resp = requests.post(f"{API_BASE_URL}{endpoint}", files=files, timeout=60)
         else:
-            resp = requests.post(f"{API_BASE_URL}{endpoint}", json=json_data, timeout=30)
+            resp = requests.post(f"{API_BASE_URL}{endpoint}", json=json_data, timeout=60)
         if resp.status_code == 200:
             return resp.json()
-    except Exception as e:
+    except Exception:
         pass
     return None
 
@@ -123,7 +124,7 @@ def api_put(endpoint: str, json_data: dict) -> Any:
         resp = requests.put(f"{API_BASE_URL}{endpoint}", json=json_data, timeout=12)
         if resp.status_code == 200:
             return resp.json()
-    except Exception as e:
+    except Exception:
         pass
     return None
 
@@ -132,9 +133,23 @@ def api_patch(endpoint: str, json_data: dict) -> Any:
         resp = requests.patch(f"{API_BASE_URL}{endpoint}", json=json_data, timeout=12)
         if resp.status_code == 200:
             return resp.json()
-    except Exception as e:
+    except Exception:
         pass
     return None
+
+# ----------------- Session State & Run Recovery -----------------
+if "active_run_id" not in st.session_state:
+    st.session_state["active_run_id"] = None
+if "selected_approval_ids" not in st.session_state:
+    st.session_state["selected_approval_ids"] = []
+if "nav_page" not in st.session_state:
+    st.session_state["nav_page"] = "🤖 AI Copilot & Search"
+
+# Automatic run recovery from database if active_run_id is None
+if not st.session_state["active_run_id"]:
+    latest_run = api_get("/agent/runs/latest")
+    if latest_run and isinstance(latest_run, dict) and latest_run.get("run_id"):
+        st.session_state["active_run_id"] = latest_run["run_id"]
 
 # ----------------- Integration Status Helpers -----------------
 import smtplib
@@ -232,6 +247,21 @@ def check_linkedin_status() -> tuple[str, str]:
         pass
     return "🔴 Disconnected", "#EF4444"
 
+# ----------------- Navigation Options -----------------
+NAV_OPTIONS = [
+    "🤖 AI Copilot & Search",
+    "💼 Discovered Jobs Matrix",
+    "🛡️ Human Approvals Center",
+    "📊 Applications Pipeline",
+    "👤 Candidate Profile & Resume",
+    "📈 Analytics & KPIs"
+]
+
+if st.session_state["nav_page"] not in NAV_OPTIONS:
+    st.session_state["nav_page"] = NAV_OPTIONS[0]
+
+nav_index = NAV_OPTIONS.index(st.session_state["nav_page"])
+
 # ----------------- Sidebar Navigation -----------------
 with st.sidebar:
     st.markdown("""
@@ -248,18 +278,17 @@ with st.sidebar:
     
     st.markdown("---")
     
-    menu = st.radio(
+    selected_nav = st.radio(
         "Navigation",
-        [
-            "🤖 AI Copilot & Search",
-            "💼 Discovered Jobs Matrix",
-            "🛡️ Human Approvals Center",
-            "📊 Applications Pipeline",
-            "👤 Candidate Profile & Resume",
-            "📈 Analytics & KPIs"
-        ],
-        index=0
+        NAV_OPTIONS,
+        index=nav_index,
+        key="sidebar_nav"
     )
+    if selected_nav != st.session_state["nav_page"]:
+        st.session_state["nav_page"] = selected_nav
+        st.rerun()
+    
+    menu = st.session_state["nav_page"]
     
     st.markdown("---")
     
@@ -411,82 +440,242 @@ if menu == "🤖 AI Copilot & Search":
         <p style="color: #94A3B8; font-size: 13px; line-height: 1.6; margin: 0;">
             Provide your target role directive in plain natural language. The LangGraph multi-agent supervisor 
             will parse requirements, search legitimate job sources, perform MD5 deduplication, evaluate 7-factor 
-            match scores against your resume, discover recruiters, and prepare application packages for your review.
+            match scores against your resume, discover recruiters, and prepare batch application packages for your review.
         </p>
     </div>
     """, unsafe_allow_html=True)
     
     default_prompt = (
-        "I am an AI Engineer based in Hyderabad, India with 2.9 years of experience. "
-        "Find active jobs in AI Engineer, Generative AI Engineer, Agentic AI Engineer, Applied AI Engineer, LLM Engineer, RAG Engineer, and AI Backend Engineer. "
-        "Locations: Remote India, Hyderabad remote/hybrid, and Remote-first companies hiring in India. "
-        "Focus on: Agentic AI + RAG + LangGraph + MCP + Python/FastAPI + AWS Bedrock + Milvus. "
-        "Prioritize 1-3, 2-4, 2-5, 3-5 years experience. Search company career portals directly. "
-        "Find recruiters with verified sources, prepare tailored applications, and draft personalized outreach."
+        "I am an AI Engineer based in Hyderabad, India with 2.9 years of professional experience.\n\n"
+        "I am currently looking for jobs in:\n"
+        "- AI Engineer\n"
+        "- Generative AI Engineer\n"
+        "- Agentic AI Engineer\n"
+        "- Applied AI Engineer\n"
+        "- LLM Engineer\n"
+        "- AI/ML Engineer – GenAI\n"
+        "- RAG Engineer\n"
+        "- AI Backend Engineer\n\n"
+        "My preferred location is:\n"
+        "1. Remote roles in India\n"
+        "2. Hyderabad remote/hybrid roles\n"
+        "3. Remote-first companies that hire employees in India\n\n"
+        "My technical profile:\n"
+        "- Generative AI / LLM applications\n"
+        "- Agentic AI and multi-agent systems\n"
+        "- LangGraph\n"
+        "- LangChain\n"
+        "- MCP\n"
+        "- RAG\n"
+        "- Hybrid RAG\n"
+        "- Semantic search\n"
+        "- BM25\n"
+        "- Graph retrieval\n"
+        "- RRF\n"
+        "- Cross-encoder reranking\n"
+        "- Embeddings\n"
+        "- Context engineering\n"
+        "- Memory/state management\n"
+        "- Tool calling / function calling\n"
+        "- RAGAS\n"
+        "- DeepEval\n"
+        "- LLM-as-a-Judge\n"
+        "- Python\n"
+        "- FastAPI\n"
+        "- PostgreSQL\n"
+        "- Redis/ElastiCache\n"
+        "- Milvus\n"
+        "- AWS Bedrock\n"
+        "- AWS EKS\n"
+        "- Lambda\n"
+        "- S3\n"
+        "- Docker\n"
+        "- Kubernetes\n"
+        "- CI/CD\n"
+        "- Langfuse\n"
+        "- OpenTelemetry\n"
+        "- Prometheus/Grafana\n"
+        "- Guardrails, PII/PHI protection and HITL\n\n"
+        "I have 2.9 years of experience, so prioritize jobs asking for 1–3, 2–4, 2–5 or 3–5 years. Do not automatically reject 3+ year roles because I am only 0.1 year below the requirement, but clearly mark experience mismatches.\n\n"
+        "I want you to search CURRENT company career portals directly, not just LinkedIn, Indeed, Naukri or generic job aggregators.\n\n"
+        "Find active jobs that match my profile and provide:\n\n"
+        "1. Company\n"
+        "2. Job title\n"
+        "3. Exact location\n"
+        "4. Remote / hybrid / onsite\n"
+        "5. Experience requirement\n"
+        "6. Salary, if publicly available\n"
+        "7. Why my profile matches\n"
+        "8. Match percentage\n"
+        "9. Direct company application URL\n"
+        "10. Recruiter name, if publicly available\n"
+        "11. Recruiter's LinkedIn URL\n"
+        "12. Public recruiter email, if legitimately available\n"
+        "13. Public recruiting/company email, if available\n"
+        "14. Public phone number, only if legitimately published for recruiting/business purposes\n"
+        "15. Any important eligibility requirements\n"
+        "16. Priority: High / Medium / Low\n\n"
+        "Do NOT invent or guess recruiter emails, phone numbers, LinkedIn profiles, salaries or job URLs. If something cannot be verified, say \"Not publicly available.\"\n\n"
+        "Prioritize:\n"
+        "- Software/product companies\n"
+        "- AI companies\n"
+        "- SaaS companies\n"
+        "- Startups\n"
+        "- Companies hiring remotely in India\n"
+        "- Hyderabad companies offering remote/hybrid work\n\n"
+        "Focus especially on roles involving:\n"
+        "Agentic AI + RAG + LangGraph + MCP + Python/FastAPI + AWS/Bedrock.\n\n"
+        "After finding the jobs, rank the TOP 20 opportunities for me.\n\n"
+        "For the top opportunities, also draft:\n"
+        "A. A short LinkedIn DIRECT message to the recruiter (not a connection request)\n"
+        "B. A professional email to the recruiter/hiring team\n"
+        "C. A concise subject line\n\n"
+        "My name is Jashuva Billa.\n"
+        "Location: Hyderabad, India.\n"
+        "Experience: 2.9 years.\n"
+        "Email: jashuvabilla@gmail.com\n"
+        "Phone: +91 9618751495\n"
+        "LinkedIn: www.linkedin.com/in/jashuva-billa\n\n"
+        "Important:\n"
+        "- Use current information.\n"
+        "- Prefer official company career portals.\n"
+        "- Verify that the job is currently active before recommending it.\n"
+        "- Clearly distinguish remote India from US/global remote.\n"
+        "- Do not recommend roles requiring US work authorization unless the company explicitly supports hiring from India.\n"
+        "- Do not exaggerate my experience as 3+ years; use 2.9 years.\n"
+        "- Keep the final answer structured in tables."
     )
     
     user_prompt = st.text_area(
         "Natural Language Job Search & Application Directive",
         value=default_prompt,
-        height=130,
+        height=320,
         placeholder="E.g. Find remote AI Engineer roles (2-4 yrs exp) focusing on Python, RAG, and LangGraph..."
     )
     
     col_run, col_clear = st.columns([3, 1])
     with col_run:
         launch_btn = st.button("🚀 Launch Autonomous Multi-Agent Pipeline", use_container_width=True)
+    with col_clear:
+        if st.button("🔄 Reset Active Run", use_container_width=True):
+            st.session_state["active_run_id"] = None
+            st.rerun()
     
+    # If the user clicked Launch Search, execute and persist
     if launch_btn and user_prompt:
         st.markdown("---")
         st.subheader("⚡ Multi-Agent Web Research & Execution Progress")
         
-        st.markdown(f"""
+        status_box = st.empty()
+        status_box.markdown(f"""
         <div class="glass-card" style="border-left: 4px solid #6366F1; margin-bottom: 15px;">
-            <div style="font-size: 13px; color: #818CF8; font-weight: 700; text-transform: uppercase;">🤖 AI Web Research Directive</div>
+            <div style="font-size: 13px; color: #818CF8; font-weight: 700; text-transform: uppercase;">🤖 Executing Autonomous Pipeline</div>
             <p style="color: #E2E8F0; font-size: 13px; margin: 4px 0 0 0;">"{user_prompt}"</p>
         </div>
         """, unsafe_allow_html=True)
         
-        agent_steps = [
-            ("Supervisor", "Parsed natural language requirements into structured SearchCriteria", "✓"),
-            ("Candidate Agent", "Loaded verified candidate profile and technical capabilities", "✓"),
-            ("OpenAI Web Search", "Executing live internet search via OpenAI Responses API (Web Search tool)", "⏳"),
-            ("Job Research Agent", "Retrieved official company postings and removed duplicate listings", "✓"),
-            ("Matching Agent", "Evaluated jobs using deterministic 7-factor scoring engine", "✓"),
-            ("Recruiter Agent", "Researched talent acquisition partners with source evidence (strong matches)", "✓"),
-            ("Application Agent", "Generated tailored resume, custom cover letter, and safe answers", "✓"),
-            ("Human Approval Gate", "Pausing workflow for human review and explicit authorization", "🛡️")
-        ]
+        with st.spinner("Multi-Agent Pipeline searching, matching, researching recruiters, and preparing batch packages..."):
+            result = api_post("/agent/run", json_data={"prompt": user_prompt})
         
-        progress_bar = st.progress(0)
-        status_box = st.empty()
-        
-        for idx, (agent_name, desc, icon) in enumerate(agent_steps):
-            status_box.markdown(f"""
-            <div style="background: rgba(99, 102, 241, 0.15); border: 1px solid rgba(99, 102, 241, 0.3); padding: 12px 18px; border-radius: 12px; margin-bottom: 10px;">
-                <span style="color: #818CF8; font-weight: 700; font-size: 11px; text-transform: uppercase;">[{agent_name}]</span>
-                <p style="color: #FFFFFF; font-size: 13px; margin: 4px 0 0 0; font-weight: 500;">{icon} {desc}...</p>
+        if result and result.get("run_id"):
+            st.session_state["active_run_id"] = result["run_id"]
+            st.success(f"✓ Pipeline execution completed! Search Run ID: `{result['run_id']}`")
+            time.sleep(0.5)
+            st.rerun()
+        else:
+            st.error("Failed to execute pipeline or communicate with backend server.")
+
+    # Always render active search run state if available (preserves across reruns and tabs)
+    active_run_id = st.session_state.get("active_run_id")
+    if active_run_id:
+        run_data = api_get(f"/agent/runs/{active_run_id}")
+        if run_data:
+            st.markdown("---")
+            
+            # Status Badge Styling
+            status = run_data.get("status", "COMPLETED")
+            status_badge_class = (
+                "badge-brand" if status == "SEARCHING"
+                else "badge-warning" if status == "WAITING_FOR_APPROVAL"
+                else "badge-cyan" if status == "PARTIALLY_APPROVED"
+                else "badge-success" if status == "COMPLETED"
+                else "badge-danger"
+            )
+            
+            st.markdown(f"""
+            <div class="glass-card" style="border-left: 4px solid #818CF8;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                    <div>
+                        <span class="badge {status_badge_class}">Status: {status}</span>
+                        <span class="badge badge-brand">Run ID: {active_run_id}</span>
+                        <h2 style="margin: 8px 0 2px 0; font-size: 20px;">Durable Search & Batch Run Overview</h2>
+                    </div>
+                </div>
+                <p style="color: #CBD5E1; font-size: 13px; margin: 0 0 12px 0;"><strong>Directive:</strong> "{run_data.get('search_prompt', '')}"</p>
             </div>
             """, unsafe_allow_html=True)
-            time.sleep(0.3)
-            progress_bar.progress((idx + 1) / len(agent_steps))
-        
-        # Call backend API
-        result = api_post("/agent/run", json_data={"prompt": user_prompt})
-        
-        jobs_found = result.get("jobs_found", 6) if result else 6
-        matches_count = result.get("matches_count", 4) if result else 4
-        
-        status_box.markdown(f"""
-        <div style="background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.3); padding: 14px 20px; border-radius: 12px;">
-            <span style="color: #10B981; font-weight: 700; font-size: 12px;">✓ MULTI-AGENT RESEARCH COMPLETE</span>
-            <p style="color: #FFFFFF; font-size: 13px; margin: 4px 0 0 0; font-weight: 600;">
-                ✓ Found & verified {jobs_found} postings • ✓ {matches_count} strong matches evaluated • Application package prepared for approval.
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        st.success("🎉 Research & Application Package Ready! Switch to '🛡️ Human Approvals Center' in the sidebar to review and approve.")
+            
+            # Key Real Metrics from SQL
+            m1, m2, m3, m4, m5, m6 = st.columns(6)
+            m1.metric("Jobs Discovered", run_data.get("total_jobs", 0))
+            m2.metric("Unique Jobs", run_data.get("unique_jobs", 0))
+            m3.metric("Qualified Jobs", run_data.get("qualified_jobs", 0))
+            m4.metric("Strong Matches", run_data.get("strong_matches", 0))
+            m5.metric("Prepared Apps", run_data.get("applications_prepared", 0))
+            m6.metric("Pending Approvals", run_data.get("approvals_pending", 0))
+            
+            # Human Approval Gate Banner (UX requirement #30)
+            pending_count = run_data.get("approvals_pending", 0)
+            if pending_count > 0 or status == "WAITING_FOR_APPROVAL":
+                st.markdown(f"""
+                <div class="glass-card" style="background: rgba(245, 158, 11, 0.1); border: 2px solid #F59E0B; padding: 22px; border-radius: 16px; margin: 20px 0;">
+                    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 10px;">
+                        <span style="font-size: 28px;">🛡️</span>
+                        <div>
+                            <h3 style="color: #FCD34D !important; margin: 0; font-size: 20px;">HUMAN APPROVAL REQUIRED</h3>
+                            <p style="color: #E2E8F0; font-size: 13px; margin: 2px 0 0 0;">
+                                Your search has completed. <strong>{run_data.get('total_jobs', 0)}</strong> jobs discovered • <strong>{run_data.get('qualified_jobs', 0)}</strong> qualified • <strong>{run_data.get('applications_prepared', 0)}</strong> application packages prepared.
+                            </p>
+                        </div>
+                    </div>
+                    <p style="color: #CBD5E1; font-size: 14px; margin: 0 0 15px 0;">
+                        <strong>{pending_count}</strong> applications are waiting for your explicit review & approval before any email or outreach is dispatched.
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                if st.button("👉 Open Human Approval Center", key="open_hitl_btn", use_container_width=True):
+                    st.session_state["nav_page"] = "🛡️ Human Approvals Center"
+                    st.rerun()
+
+            # Discovered Jobs for this Run
+            st.markdown("### 💼 Discovered Jobs in this Run")
+            run_jobs = api_get("/jobs", params={"run_id": active_run_id}) or []
+            if run_jobs:
+                st.caption(f"Showing {len(run_jobs)} persisted jobs from Search Run `{active_run_id}`")
+                for job in run_jobs[:20]:
+                    match = job.get("match") or {}
+                    score = match.get("overall_score", 85)
+                    b_class = "badge-success" if score >= 85 else "badge-brand" if score >= 75 else "badge-warning"
+                    
+                    st.markdown(f"""
+                    <div class="glass-card" style="padding: 14px 18px; margin-bottom: 10px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <span class="badge {b_class}">{score}% Match</span>
+                                <span class="badge badge-cyan">{job.get('location', 'Remote')}</span>
+                                <strong style="font-size: 15px; color: #FFFFFF;">{job.get('title')}</strong> — <span style="color: #94A3B8;">{job.get('company')}</span>
+                            </div>
+                            <div>
+                                <a href="{job.get('application_url') or job.get('source_url') or '#'}" target="_blank" style="color: #818CF8; font-size: 12px; text-decoration: underline;">
+                                    View Link ↗
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                if len(run_jobs) > 20:
+                    st.info(f"+ {len(run_jobs) - 20} more jobs recorded in SQL database. Switch to 'Discovered Jobs Matrix' for full interactive search.")
 
 # ==============================================================================
 # VIEW 2: DISCOVERED JOBS & MATCH MATRIX
@@ -505,16 +694,21 @@ elif menu == "💼 Discovered Jobs Matrix":
     with col_f1:
         keyword = st.text_input("🔍 Search by title, company or skill", "")
     with col_f2:
-        score_filter = st.selectbox("Min Match Score", ["All (0%+)", "75%+", "85%+", "90%+"], index=0)
+        score_filter = st.selectbox("Min Match Score", ["All (0%+)", "65%+ (Possible)", "75%+ (Qualified)", "85%+ (Strong)"], index=0)
     with col_f3:
         remote_only = st.checkbox("Remote Only", value=True)
     
     min_score = 0
-    if "75" in score_filter: min_score = 75
+    if "65" in score_filter: min_score = 65
+    elif "75" in score_filter: min_score = 75
     elif "85" in score_filter: min_score = 85
-    elif "90" in score_filter: min_score = 90
     
-    jobs = api_get("/jobs", params={"min_score": min_score, "remote_only": remote_only}) or []
+    active_run_id = st.session_state.get("active_run_id")
+    filter_params = {"min_score": min_score, "remote_only": remote_only}
+    if active_run_id:
+        filter_params["run_id"] = active_run_id
+    
+    jobs = api_get("/jobs", params=filter_params) or []
     
     if keyword:
         k = keyword.lower()
@@ -527,7 +721,7 @@ elif menu == "💼 Discovered Jobs Matrix":
         for job in jobs:
             match = job.get("match") or {}
             score = match.get("overall_score", 85)
-            badge_class = "badge-success" if score >= 90 else "badge-brand" if score >= 80 else "badge-warning"
+            badge_class = "badge-success" if score >= 85 else "badge-brand" if score >= 75 else "badge-warning"
             
             verif_status = job.get("verification_status", "VERIFIED")
             verif_badge_class = "badge-success" if verif_status == "VERIFIED" else "badge-cyan" if verif_status == "PARTIALLY_VERIFIED" else "badge-warning"
@@ -595,14 +789,28 @@ elif menu == "💼 Discovered Jobs Matrix":
 elif menu == "🛡️ Human Approvals Center":
     st.markdown("""
     <div class="glass-card">
-        <h1 style="font-size: 24px; margin-bottom: 4px;">Human Approval & Review Center</h1>
+        <h1 style="font-size: 24px; margin-bottom: 4px;">Human Approval & Governance Center</h1>
         <p style="color: #94A3B8; font-size: 13px; margin: 0;">
-            Mandatory human governance: No application is submitted and no recruiter email is sent without your explicit review and approval.
+            Mandatory human governance: No external application or email outreach is submitted without your explicit review and authorization.
         </p>
     </div>
     """, unsafe_allow_html=True)
     
-    approvals = api_get("/approvals") or []
+    active_run_id = st.session_state.get("active_run_id")
+    
+    # Filter selection: All Pending vs Active Run
+    f_c1, f_c2 = st.columns([2, 1])
+    with f_c1:
+        if active_run_id:
+            st.info(f"🎯 Displaying approval queue for Active Search Run: `{active_run_id}`")
+    with f_c2:
+        filter_all = st.checkbox("Show All Pending Across All Runs", value=False)
+    
+    params = {"status": "PENDING"}
+    if active_run_id and not filter_all:
+        params["run_id"] = active_run_id
+        
+    approvals = api_get("/approvals", params=params) or []
     
     if not approvals:
         st.markdown("""
@@ -613,6 +821,61 @@ elif menu == "🛡️ Human Approvals Center":
         </div>
         """, unsafe_allow_html=True)
     else:
+        # BATCH ACTION TOOLBAR
+        all_approval_ids = [pkg.get("approval_id") for pkg in approvals if pkg.get("approval_id")]
+        
+        st.markdown(f"""
+        <div class="glass-card" style="padding: 16px; border-left: 4px solid #10B981; margin-bottom: 20px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <h3 style="margin: 0; font-size: 18px; color: #FFFFFF;">Batch Decision Action Bar</h3>
+                    <p style="color: #94A3B8; font-size: 12px; margin: 2px 0 0 0;">
+                        <strong>{len(approvals)}</strong> applications pending review in this queue.
+                    </p>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        tb1, tb2, tb3, tb4 = st.columns([2, 2, 2, 3])
+        with tb1:
+            select_all = st.checkbox(f"☑ Select All ({len(all_approval_ids)})", value=True, key="select_all_cb")
+        
+        selected_ids = all_approval_ids if select_all else []
+        
+        with tb2:
+            if st.button(f"✓ Approve Selected ({len(selected_ids)})", key="bulk_approve_btn", use_container_width=True):
+                if selected_ids:
+                    with st.spinner(f"Processing bulk approval for {len(selected_ids)} applications..."):
+                        resp = api_post("/approvals/bulk-decide", json_data={
+                            "approval_ids": selected_ids,
+                            "decision": "APPROVE"
+                        })
+                    if resp:
+                        st.success(f"✓ Bulk Approval Complete: {resp.get('approved', 0)} approved, {resp.get('rejected', 0)} rejected, {resp.get('failed', 0)} failed.")
+                        time.sleep(1)
+                        st.rerun()
+                else:
+                    st.warning("No applications selected.")
+                    
+        with tb3:
+            if st.button(f"✕ Reject Selected ({len(selected_ids)})", key="bulk_reject_btn", use_container_width=True):
+                if selected_ids:
+                    with st.spinner(f"Rejecting {len(selected_ids)} applications..."):
+                        resp = api_post("/approvals/bulk-decide", json_data={
+                            "approval_ids": selected_ids,
+                            "decision": "REJECT"
+                        })
+                    if resp:
+                        st.warning(f"Bulk Rejection Complete: {resp.get('rejected', 0)} rejected.")
+                        time.sleep(1)
+                        st.rerun()
+                else:
+                    st.warning("No applications selected.")
+        
+        st.markdown("---")
+        
+        # Individual Approval Cards
         for idx, pkg in enumerate(approvals):
             job = pkg.get("job") or {}
             match = pkg.get("match") or {}
@@ -621,17 +884,24 @@ elif menu == "🛡️ Human Approvals Center":
             email_outreach = pkg.get("email_outreach") or {}
             linkedin_outreach = pkg.get("linkedin_outreach") or {}
             questions = pkg.get("questions") or []
+            approval_id = pkg.get("approval_id")
+            
+            score = match.get("overall_score", 85)
+            badge_class = "badge-success" if score >= 85 else "badge-brand" if score >= 75 else "badge-warning"
             
             with st.container():
                 st.markdown(f"""
                 <div class="glass-card" style="border-left: 4px solid #6366F1;">
-                    <div>
-                        <span class="badge badge-success">{match.get('overall_score', 90)}% Match</span>
-                        <span class="badge badge-brand">Human Review Required</span>
-                        <h3 style="margin: 6px 0 2px 0;">{job.get('title')} — {job.get('company')}</h3>
-                        <p style="color: #94A3B8; font-size: 12px; margin: 0;">
-                            Recruiter: <strong>{recruiter.get('name', 'Talent Partner')}</strong> ({recruiter.get('title', 'Technical Recruiter')}) • {job.get('location')}
-                        </p>
+                    <div style="display: flex; justify-content: space-between; align-items: start;">
+                        <div>
+                            <span class="badge {badge_class}">{score}% Match</span>
+                            <span class="badge badge-brand">Review Required</span>
+                            <span class="badge badge-cyan">{job.get('location', 'Remote')}</span>
+                            <h3 style="margin: 6px 0 2px 0;">{job.get('title')} — {job.get('company')}</h3>
+                            <p style="color: #94A3B8; font-size: 12px; margin: 0;">
+                                Recruiter: <strong>{recruiter.get('name', 'Talent Team')}</strong> ({recruiter.get('title', 'Technical Recruiter')}) • Approval ID: <code>{approval_id}</code>
+                            </p>
+                        </div>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -648,14 +918,21 @@ elif menu == "🛡️ Human Approvals Center":
                     col_em, col_li = st.columns(2)
                     with col_em:
                         st.markdown("**Personalized Recruiter Email (Editable)**")
+                        curr_recip = email_outreach.get("recipient_email") or recruiter.get("public_email") or recruiter.get("email") or ""
+                        recip_email = st.text_input(f"Recipient Email ({idx})", value=curr_recip, placeholder="e.g. careers@company.com or recruiter.name@company.com", key=f"recip_{idx}")
                         subj = st.text_input(f"Email Subject ({idx})", value=email_outreach.get("subject", f"Application: {job.get('title')}"), key=f"subj_{idx}")
-                        body = st.text_area(f"Email Body ({idx})", value=email_outreach.get("body", ""), height=150, key=f"body_{idx}")
-                        st.caption(f"Verified Destination: {email_outreach.get('recipient_email') or 'talent@company.com'}")
+                        body = st.text_area(f"Email Body ({idx})", value=email_outreach.get("body", ""), height=200, key=f"body_{idx}")
+                        if not recip_email:
+                            st.caption("ℹ️ No public personal email listed. Dispatches to verified career portal / manual contact.")
+                        else:
+                            st.caption(f"📫 Verified Recipient: `{recip_email}`")
                     
                     with col_li:
-                        st.markdown("**Compliant LinkedIn Connection Note**")
-                        li_text = st.text_area(f"LinkedIn Message ({idx})", value=linkedin_outreach.get("body", ""), height=150, key=f"li_{idx}")
-                        st.info("💡 100% Compliant: Copy this pre-approved text and paste directly into the recruiter's LinkedIn connection note.")
+                        st.markdown("**LinkedIn Connection Request & Direct Message**")
+                        li_text = st.text_area(f"Connection Note & Message ({idx})", value=linkedin_outreach.get("body", ""), height=200, key=f"li_{idx}")
+                        li_url = recruiter.get("linkedin_url") or f"https://www.linkedin.com/search/results/people/?keywords={job.get('company', '')}+technical+recruiter"
+                        st.link_button(f"🔗 Open Recruiter Profile on LinkedIn ({recruiter.get('name', 'Talent Team')})", url=li_url, use_container_width=True)
+                        st.info("💡 1-Click Outreach: Click the button above to view the recruiter's profile, send a connection request, and paste this message.")
                 
                 with tab_resume:
                     st.markdown("**Factual Alignment Highlights (Zero Experience Hallucination)**")
@@ -686,12 +963,13 @@ elif menu == "🛡️ Human Approvals Center":
                         for ev_i, ev in enumerate(job.get("evidence", [])):
                             st.markdown(f"- **{ev.get('source_type', 'source')}**: [{ev.get('title') or ev.get('url')}]({ev.get('url')}) (Supports: `{', '.join(ev.get('supports', []))}`)")
                 
-                # Decision Buttons
+                # Single Item Action Buttons
                 col_app, col_rej = st.columns([2, 1])
                 with col_app:
                     if st.button(f"✓ Approve & Dispatch Outreach ({job.get('company')})", key=f"app_btn_{idx}"):
-                        api_post(f"/approvals/{pkg.get('approval_id')}/decide", json_data={
+                        resp = api_post(f"/approvals/{approval_id}/decide", json_data={
                             "decision": "APPROVE",
+                            "modified_recipient_email": recip_email.strip() if recip_email else None,
                             "modified_email_subject": subj,
                             "modified_email_body": body,
                             "modified_linkedin_body": li_text,
@@ -703,8 +981,8 @@ elif menu == "🛡️ Human Approvals Center":
                 
                 with col_rej:
                     if st.button(f"✕ Reject ({job.get('company')})", key=f"rej_btn_{idx}"):
-                        api_post(f"/approvals/{pkg.get('approval_id')}/decide", json_data={"decision": "REJECT"})
-                        st.warning("Application marked as rejected.")
+                        api_post(f"/approvals/{approval_id}/decide", json_data={"decision": "REJECT"})
+                        st.warning(f"Application for {job.get('company')} marked as rejected.")
                         time.sleep(1)
                         st.rerun()
                 
@@ -723,7 +1001,12 @@ elif menu == "📊 Applications Pipeline":
     </div>
     """, unsafe_allow_html=True)
     
-    apps = api_get("/applications") or []
+    active_run_id = st.session_state.get("active_run_id")
+    p_params = {}
+    if active_run_id:
+        p_params["run_id"] = active_run_id
+        
+    apps = api_get("/applications", params=p_params) or []
     
     stages = ["REVIEW_REQUIRED", "APPROVED", "RECRUITER_CONTACTED", "INTERVIEW", "APPLIED"]
     cols = st.columns(len(stages))
@@ -771,17 +1054,17 @@ elif menu == "👤 Candidate Profile & Resume":
                 st.rerun()
     
     profile = api_get("/candidates/profile") or {
-        "name": "Alex Morgan",
-        "email": "alex.morgan.ai@example.com",
-        "years_of_experience": 3.5,
-        "summary": "Experienced AI Engineer specializing in Python, RAG pipelines, and LangGraph multi-agent architectures.",
-        "skills": ["Python", "RAG", "LangGraph", "Agentic AI", "AWS", "LLMs", "FastAPI"]
+        "name": "Jashuva Billa",
+        "email": "jashuvabilla@gmail.com",
+        "years_of_experience": 2.9,
+        "summary": "AI Engineer based in Hyderabad with 2.9 years of experience in Generative AI, LangGraph, RAG, MCP, and Agentic Systems.",
+        "skills": ["Python", "RAG", "LangGraph", "Agentic AI", "AWS Bedrock", "Milvus", "FastAPI"]
     }
     
     col1, col2, col3 = st.columns(3)
     name = col1.text_input("Full Name", value=profile.get("name", ""))
     email = col2.text_input("Email", value=profile.get("email", ""))
-    yoe = col3.number_input("Years of Experience", value=float(profile.get("years_of_experience", 3.0)), step=0.5)
+    yoe = col3.number_input("Years of Experience", value=float(profile.get("years_of_experience", 2.9)), step=0.5)
     
     summary = st.text_area("Summary", value=profile.get("summary", ""), height=100)
     

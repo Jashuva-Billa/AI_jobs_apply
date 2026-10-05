@@ -14,42 +14,50 @@ class OutreachGenerationService:
         job: Dict[str, Any],
         recruiter: Optional[RecruiterBase]
     ) -> OutreachMessageBase:
-        recruiter_name = recruiter.name.split()[0] if recruiter and recruiter.name else "Hiring Team"
+        recruiter_salutation = f"Hi {recruiter.name.split()[0]}" if recruiter and recruiter.name else "Hi"
         company = job.get("company", "the team")
-        job_title = job.get("title", "AI Engineer")
-        top_skills = ", ".join(candidate.skills[:4]) if candidate.skills else "Python, RAG, LangGraph, and LLMs"
+        job_title = job.get("title", "Applied AI Engineer")
 
         system_prompt = (
-            "You are a professional Executive Recruiter Outreach Assistant. "
-            "Write a concise, personalized, high-conversion recruiter email. "
-            "RULES:\n"
-            "1. Max 100-120 words. No fluffy buzzwords or generic spam.\n"
-            "2. Highlight 2-3 specific matching technical capabilities (e.g. Python, RAG, LangGraph, AWS).\n"
-            "3. State enthusiasm for the specific role and company.\n"
-            "4. Include a clear, polite call-to-action.\n"
-            "5. Address the recruiter by first name."
+            "You are a professional Executive Recruiter Outreach Assistant for Jashuva Billa. "
+            "Generate a professional, high-impact recruiter email adhering strictly to this structure:\n"
+            "1. Salutation (e.g. 'Hi [Recruiter Name / Team]')\n"
+            "2. Opening: 'I hope you're doing well.'\n"
+            "3. State reaching out regarding the specific [Job Title] position at [Company], stating 2.9 years of experience as an AI Engineer focused on production-oriented Generative AI and Agentic AI systems.\n"
+            "4. Core technical summary: RAG, LangGraph-based agent orchestration, MCP/tool calling, context engineering, multi-agent workflows, evaluation using RAGAS/DeepEval and LLM-as-a-Judge, Python/FastAPI, Redis, and AWS/Bedrock.\n"
+            "5. Relevance to role: Align role focus on production LLM applications, agentic workflows, and evaluation.\n"
+            "6. Call to action: Note attached resume and express interest in discussing team fit.\n"
+            "7. Closing signature with Jashuva Billa, AI Engineer | Generative AI | Agentic AI | RAG, Hyderabad, India, +91 9618751495, jashuvabilla@gmail.com, LinkedIn: linkedin.com/in/jashuva-billa."
         )
 
         user_prompt = (
-            f"Candidate Name: {candidate.name}\n"
-            f"Candidate Summary: {candidate.summary}\n"
-            f"Candidate Skills: {top_skills}\n"
             f"Target Company: {company}\n"
             f"Target Role: {job_title}\n"
-            f"Recruiter Name: {recruiter_name}"
+            f"Recruiter: {recruiter.name if recruiter else 'Hiring Team'}"
         )
 
         body = await llm_provider.generate_text(system_prompt, user_prompt)
         if not body or len(body) < 30:
             body = (
-                f"Hi {recruiter_name},\n\n"
-                f"I came across the {job_title} opportunity at {company}. "
-                f"My background in designing production GenAI workflows using {top_skills} aligns directly with your team's requirements.\n\n"
-                f"I've attached my tailored resume and would welcome the opportunity to discuss how my experience can support your AI roadmap.\n\n"
-                f"Best regards,\n{candidate.name or 'Candidate'}"
+                f"{recruiter_salutation},\n\n"
+                f"I hope you're doing well.\n\n"
+                f"I’m reaching out regarding the {job_title} position at {company}. "
+                f"I have 2.9 years of experience as an AI Engineer, focused on building production-oriented Generative AI and Agentic AI systems.\n\n"
+                f"My experience includes RAG, LangGraph-based agent orchestration, MCP/tool calling, context engineering, "
+                f"multi-agent workflows, evaluation using RAGAS/DeepEval and LLM-as-a-Judge, Python/FastAPI, Redis, and AWS/Bedrock.\n\n"
+                f"The role's focus on production LLM applications, agentic workflows, context engineering, and evaluation is closely aligned with my experience.\n\n"
+                f"I have attached my resume for your consideration. I would appreciate the opportunity to discuss whether my background would be a good fit for the team.\n\n"
+                f"Thank you for your time.\n\n"
+                f"Best regards,\n"
+                f"Jashuva Billa\n"
+                f"AI Engineer | Generative AI | Agentic AI | RAG\n"
+                f"Hyderabad, India\n"
+                f"+91 9618751495\n"
+                f"jashuvabilla@gmail.com\n"
+                f"LinkedIn: linkedin.com/in/jashuva-billa"
             )
 
-        subject = f"{candidate.name or 'Application'} — {job_title} Application & Background"
+        subject = f"Application: {job_title} — Jashuva Billa (2.9 yrs AI Engineer)"
         
         return OutreachMessageBase(
             channel="EMAIL",

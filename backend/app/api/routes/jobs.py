@@ -10,12 +10,16 @@ router = APIRouter(prefix="/jobs", tags=["Jobs"])
 
 @router.get("", response_model=List[JobWithMatchResponse])
 async def list_jobs(
+    run_id: Optional[str] = Query(None, description="Filter by search run ID"),
     min_score: Optional[float] = Query(None, description="Filter by minimum match score"),
     remote_only: bool = Query(False, description="Filter remote only"),
     db: AsyncSession = Depends(get_db)
 ):
     """Retrieve all discovered jobs along with candidate match score and application status."""
     query = select(Job).order_by(Job.created_at.desc())
+    if run_id:
+        query = query.filter(Job.run_id == run_id)
+        
     res = await db.execute(query)
     jobs = res.scalars().all()
 

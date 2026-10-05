@@ -9,10 +9,16 @@ if "sqlite" in settings.DATABASE_URL:
     if "/" in db_path:
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
+from sqlalchemy.pool import NullPool, AsyncAdaptedQueuePool
+
+is_testing = bool(os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TESTING"))
+
 engine = create_async_engine(
     settings.DATABASE_URL,
     echo=False,
-    future=True
+    future=True,
+    poolclass=NullPool if is_testing else AsyncAdaptedQueuePool,
+    pool_pre_ping=True
 )
 
 AsyncSessionLocal = async_sessionmaker(

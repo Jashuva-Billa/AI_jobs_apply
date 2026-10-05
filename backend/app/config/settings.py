@@ -53,8 +53,12 @@ class Settings(BaseSettings):
     MATCH_THRESHOLD: float = 75.0
     POSSIBLE_MATCH_THRESHOLD: float = 65.0
     
+    # Bounded Concurrency for Batch Processing
+    MAX_CONCURRENT_APPLICATIONS: int = 10
+    MAX_CONCURRENT_RECRUITER_RESEARCH: int = 5
+    
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=("../.env", ".env"),
         env_file_encoding="utf-8",
         extra="ignore"
     )

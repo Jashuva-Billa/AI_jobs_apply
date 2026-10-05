@@ -1,8 +1,9 @@
 import logging
+import asyncio
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from app.graph.state import JobApplicationState
-from app.schemas.schemas import SearchCriteria, CandidateProfileBase, MatchBreakdown
+from app.schemas.schemas import SearchCriteria, CandidateProfileBase, MatchBreakdown, RecruiterBase
 from app.services.job_service import job_service
 from app.services.matching_service import matching_service
 from app.services.recruiter_service import recruiter_service
@@ -10,6 +11,7 @@ from app.services.outreach_service import outreach_service
 from app.services.application_service import application_service
 from app.integrations.llm.provider import llm_provider
 from app.integrations.email.provider import email_provider
+from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -114,90 +116,164 @@ async def rank_jobs_node(state: JobApplicationState) -> Dict[str, Any]:
     # Sort descending by overall_score
     ranked = sorted(matched, key=lambda x: x.get("match", {}).get("overall_score", 0), reverse=True)
     
-    strong_matches = [j for j in ranked if j.get("match", {}).get("overall_score", 0) >= 75.0]
+    strong_matches = [
+        j for j in ranked
+        if j.get("match", {}).get("overall_score", 0) >= settings.STRONG_MATCH_THRESHOLD
+    ]
+    qualified_jobs = [
+        j for j in ranked
+        if j.get("match", {}).get("overall_score", 0) >= settings.POSSIBLE_MATCH_THRESHOLD
+    ]
     top_job = ranked[0] if ranked else None
 
     log_event(
         state,
         "MatchingAgent",
         "rank_jobs",
-        f"Ranked {len(ranked)} jobs. {len(strong_matches)} qualify as strong matches. Top: {top_job.get('company')} ({top_job.get('match', {}).get('overall_score')}%)" if top_job else "No jobs found.",
-        {"top_score": top_job.get("match", {}).get("overall_score") if top_job else 0}
+        f"Ranked {len(ranked)} jobs. {len(qualified_jobs)} qualified (>= {settings.POSSIBLE_MATCH_THRESHOLD}%), {len(strong_matches)} strong matches (>= {settings.STRONG_MATCH_THRESHOLD}%)." if ranked else "No jobs found.",
+        {
+            "total_ranked": len(ranked),
+            "qualified_count": len(qualified_jobs),
+            "strong_count": len(strong_matches),
+            "top_score": top_job.get("match", {}).get("overall_score") if top_job else 0
+        }
     )
     return {
         "ranked_jobs": ranked,
+        "qualified_jobs": qualified_jobs,
+        "strong_matches": strong_matches,
         "selected_job": top_job,
         "current_step": "rank_jobs"
     }
 
 async def discover_recruiters_node(state: JobApplicationState) -> Dict[str, Any]:
-    top_job = state.get("selected_job")
-    if not top_job:
-        return {"current_step": "discover_recruiters"}
+    strong_matches = state.get("strong_matches", [])
+    if not strong_matches:
+        strong_matches = state.get("qualified_jobs", [])[:5]
+    
+    recruiter_map: Dict[str, Dict[str, Any]] = {}
+    sem = asyncio.Semaphore(settings.MAX_CONCURRENT_RECRUITER_RESEARCH)
 
-    recruiter = await recruiter_service.discover_recruiter_for_job(
-        company_name=top_job.get("company", ""),
-        job_title=top_job.get("title", "")
-    )
+    async def discover_one(job: Dict[str, Any]):
+        company = job.get("company", "")
+        title = job.get("title", "")
+        if not company or company in recruiter_map:
+            return
+        async with sem:
+            try:
+                rec = await recruiter_service.discover_recruiter_for_job(company_name=company, job_title=title)
+                if rec:
+                    recruiter_map[company] = rec.model_dump()
+            except Exception as e:
+                logger.warning(f"Recruiter discovery skipped for {company}: {e}")
+
+    tasks = [discover_one(job) for job in strong_matches]
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    top_job = state.get("selected_job")
+    top_recruiter = recruiter_map.get(top_job.get("company")) if top_job else None
+    if not top_recruiter and recruiter_map:
+        top_recruiter = next(iter(recruiter_map.values()))
+
     log_event(
         state,
         "RecruiterAgent",
         "discover_recruiters",
-        f"Discovered recruiter: {recruiter.name} ({recruiter.title}) at {recruiter.company_name}",
-        recruiter.model_dump()
+        f"Discovered {len(recruiter_map)} verified recruiters across strong matches.",
+        {"recruiters_found": len(recruiter_map)}
     )
     return {
-        "recruiter": recruiter.model_dump(),
+        "recruiter_map": recruiter_map,
+        "recruiter": top_recruiter,
         "current_step": "discover_recruiters"
     }
 
 async def prepare_application_node(state: JobApplicationState) -> Dict[str, Any]:
     cand = CandidateProfileBase(**state["candidate_profile"])
-    job = state.get("selected_job")
-    if not job:
-        return {"current_step": "prepare_application"}
+    qualified = state.get("qualified_jobs", [])
+    if not qualified:
+        # Fallback to ranked jobs or selected_job if qualified is empty
+        qualified = state.get("ranked_jobs", [])
+        if not qualified and state.get("selected_job"):
+            qualified = [state["selected_job"]]
 
-    match = MatchBreakdown(**job["match"])
-    tailored_res = await application_service.tailor_resume(cand, job, match)
-    cover_letter = await application_service.generate_cover_letter(cand, job, match)
-    questions = application_service.prepare_application_questions(cand, job)
+    recruiter_map = state.get("recruiter_map", {})
+    sem = asyncio.Semaphore(settings.MAX_CONCURRENT_APPLICATIONS)
+    application_packages: List[Dict[str, Any]] = []
 
-    package = {
-        "application_id": f"app_{state.get('run_id', '1')}",
-        "job": job,
-        "match": match.model_dump(),
-        "tailored_resume_summary": tailored_res["tailored_summary"],
-        "tailored_resume_text": tailored_res["tailored_text"],
-        "highlighted_skills": tailored_res["highlighted_skills"],
-        "cover_letter": cover_letter,
-        "questions": [q.model_dump() for q in questions]
-    }
+    async def prepare_single_job_package(idx: int, job: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        async with sem:
+            try:
+                match = MatchBreakdown(**job["match"])
+                tailored_res = await application_service.tailor_resume(cand, job, match)
+                cover_letter = await application_service.generate_cover_letter(cand, job, match)
+                questions = application_service.prepare_application_questions(cand, job)
+                
+                # Attach recruiter if discovered
+                company = job.get("company", "")
+                rec_data = recruiter_map.get(company)
+                rec_obj = RecruiterBase(**rec_data) if rec_data else None
+                
+                email_outreach = await outreach_service.generate_recruiter_email(cand, job, rec_obj)
+                linkedin_outreach = await outreach_service.generate_linkedin_outreach(cand, job, rec_obj)
 
-    log_event(state, "ApplicationAgent", "prepare_application", f"Prepared application package for {job.get('company')} with tailored resume and cover letter.")
+                pkg = {
+                    "application_id": f"app_{state.get('run_id', 'run')}_{idx}",
+                    "job": job,
+                    "match": match.model_dump(),
+                    "tailored_resume_summary": tailored_res["tailored_summary"],
+                    "tailored_resume_text": tailored_res["tailored_text"],
+                    "highlighted_skills": tailored_res["highlighted_skills"],
+                    "cover_letter": cover_letter,
+                    "questions": [q.model_dump() for q in questions],
+                    "recruiter": rec_data,
+                    "email_outreach": email_outreach.model_dump(),
+                    "linkedin_outreach": linkedin_outreach.model_dump()
+                }
+                return pkg
+            except Exception as e:
+                logger.error(f"Error preparing package for job {job.get('company')} - {job.get('title')}: {e}")
+                return None
+
+    tasks = [prepare_single_job_package(idx, job) for idx, job in enumerate(qualified)]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for res in results:
+        if isinstance(res, dict):
+            application_packages.append(res)
+
+    top_pkg = application_packages[0] if application_packages else None
+
+    log_event(
+        state,
+        "ApplicationAgent",
+        "prepare_application",
+        f"Prepared {len(application_packages)} total application packages with tailored resumes, cover letters, and outreach drafts."
+    )
     return {
-        "application_package": package,
+        "application_packages": application_packages,
+        "application_package": top_pkg,
         "current_step": "prepare_application"
     }
 
 async def prepare_outreach_node(state: JobApplicationState) -> Dict[str, Any]:
-    cand = CandidateProfileBase(**state["candidate_profile"])
-    job = state.get("selected_job")
-    recruiter_data = state.get("recruiter")
-    recruiter = recruiter_service.RecruiterBase(**recruiter_data) if (recruiter_data and hasattr(recruiter_service, "RecruiterBase")) else None
+    packages = state.get("application_packages", [])
+    top_pkg = state.get("application_package") or (packages[0] if packages else None)
     
-    email_outreach = await outreach_service.generate_recruiter_email(cand, job, recruiter)
-    linkedin_outreach = await outreach_service.generate_linkedin_outreach(cand, job, recruiter)
+    outreach = {
+        "email": top_pkg.get("email_outreach") if top_pkg else None,
+        "linkedin": top_pkg.get("linkedin_outreach") if top_pkg else None
+    }
 
-    if state.get("application_package"):
-        state["application_package"]["email_outreach"] = email_outreach.model_dump()
-        state["application_package"]["linkedin_outreach"] = linkedin_outreach.model_dump()
-
-    log_event(state, "OutreachAgent", "prepare_outreach", f"Drafted personalized email and LinkedIn connection note for {job.get('company')}.")
+    log_event(
+        state,
+        "OutreachAgent",
+        "prepare_outreach",
+        f"Outreach packages finalized for {len(packages)} applications. Pausing for human approval gate."
+    )
     return {
-        "outreach": {
-            "email": email_outreach.model_dump(),
-            "linkedin": linkedin_outreach.model_dump()
-        },
+        "outreach": outreach,
         "approval_required": True,
         "approval_status": "PENDING",
         "current_step": "human_approval_gate"

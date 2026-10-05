@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from typing import List, Dict, Any, Optional
@@ -10,9 +10,16 @@ from app.schemas.schemas import ApplicationResponse, JobResponse, MatchBreakdown
 router = APIRouter(prefix="/applications", tags=["Applications"])
 
 @router.get("", response_model=List[ApplicationResponse])
-async def list_applications(db: AsyncSession = Depends(get_db)):
+async def list_applications(
+    run_id: Optional[str] = Query(None, description="Filter by search run ID"),
+    db: AsyncSession = Depends(get_db)
+):
     """List all tracked job applications with candidate-job match, recruiter and status."""
-    res = await db.execute(select(Application).order_by(Application.updated_at.desc()))
+    query = select(Application).order_by(Application.updated_at.desc())
+    if run_id:
+        query = query.filter(Application.run_id == run_id)
+        
+    res = await db.execute(query)
     applications = res.scalars().all()
 
     results = []
