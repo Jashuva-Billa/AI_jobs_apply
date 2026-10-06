@@ -173,7 +173,7 @@ async def process_bulk_approval_decision(
                 req.approved_at = datetime.utcnow()
                 app.status = ApplicationStatus.APPROVED
 
-                # Disptach email if enabled
+                # 1. Dispatch Email outreach if available and enabled
                 email_status = None
                 o_res = await db.execute(select(OutreachMessage).filter_by(application_id=app.id, channel="EMAIL"))
                 email_outreach = o_res.scalars().first()
@@ -193,12 +193,39 @@ async def process_bulk_approval_decision(
                     except Exception as email_err:
                         email_outreach.status = "FAILED"
                         email_status = {"error": str(email_err)}
+                elif not email_outreach or not email_outreach.recipient_email:
+                    email_status = {"status": "SKIPPED_NO_RECIPIENT_EMAIL"}
+
+                # 2. Dispatch/Prepare LinkedIn Connection Request & Direct Message Outreach
+                linkedin_status = None
+                o_li_res = await db.execute(select(OutreachMessage).filter_by(application_id=app.id, channel="LINKEDIN"))
+                li_outreach = o_li_res.scalars().first()
+                if li_outreach:
+                    try:
+                        rec_res = await db.execute(select(Recruiter).filter_by(company_name=job.company if job else "").limit(1))
+                        rec_obj = rec_res.scalars().first()
+                        li_action = await linkedin_adapter.prepare_message(
+                            recipient_name=li_outreach.recipient_name or (rec_obj.name if rec_obj else "Recruiter"),
+                            recipient_url=rec_obj.linkedin_url if rec_obj else None,
+                            message=li_outreach.body
+                        )
+                        li_outreach.status = "SENT"
+                        li_outreach.sent_at = datetime.utcnow()
+                        linkedin_status = {"status": "PREPARED_AND_SENT", "action": li_action}
+                        if app.status != ApplicationStatus.RECRUITER_CONTACTED:
+                            app.status = ApplicationStatus.RECRUITER_CONTACTED
+                    except Exception as li_err:
+                        li_outreach.status = "FAILED"
+                        linkedin_status = {"error": str(li_err)}
+                else:
+                    linkedin_status = {"status": "SKIPPED_NO_LINKEDIN_DRAFT"}
 
                 results.append({
                     "approval_id": app_id_item,
                     "status": "APPROVED",
                     "application_status": app.status.value,
-                    "email_status": email_status
+                    "email_status": email_status,
+                    "linkedin_status": linkedin_status
                 })
                 approved_count += 1
 

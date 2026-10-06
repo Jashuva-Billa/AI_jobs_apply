@@ -34,34 +34,43 @@ class MatchingService:
         if "Python" in candidate.skills and any("python" in s.lower() for s in job_skills):
             skills_score = max(skills_score, 80.0)
 
-        # 2. Experience Matching (20%)
+        # 2. Experience Matching (20%) - Target 2-3 years, strictly penalize >3.5 years
         exp_text = str(job.get("experience_required", "")).lower()
-        cand_yoe = candidate.years_of_experience
+        cand_yoe = candidate.years_of_experience or 2.9
         exp_score = 100.0
         
         exp_match = re.search(r"(\d+)(?:\s*-\s*(\d+))?", exp_text)
         if exp_match:
             min_exp = float(exp_match.group(1))
             max_exp = float(exp_match.group(2)) if exp_match.group(2) else min_exp + 2
-            if cand_yoe < min_exp:
+            if min_exp > 3.5:
+                # Disqualify/penalize roles asking for 4+, 5+, 7+ years
+                exp_score = max(10.0, 100.0 - (min_exp - cand_yoe) * 35.0)
+            elif cand_yoe < min_exp:
                 exp_score = max(50.0, 100.0 - (min_exp - cand_yoe) * 20.0)
             elif cand_yoe > max_exp + 4:
-                exp_score = 85.0 # Slight over-qualification
+                exp_score = 80.0
             else:
                 exp_score = 100.0
         else:
             exp_score = 90.0
 
-        # 3. Role Relevance (20%)
+        # 3. Role Relevance (20%) - Strict exclusion of Architect, Principal, Staff, Director, VP
         job_title = job.get("title", "").lower()
         cand_roles = [r.lower() for r in candidate.preferred_roles]
-        role_score = 70.0
-        for r in cand_roles:
-            if r in job_title or any(w in job_title for w in r.split()):
-                role_score = 95.0
-                break
-        if any(term in job_title for term in ["ai engineer", "genai", "generative ai", "llm", "machine learning"]):
-            role_score = max(role_score, 90.0)
+        
+        # Check forbidden seniority keywords
+        forbidden_seniority = ["architect", "principal", "director", "vp", "head of", "staff", "chief", "partner"]
+        if any(f in job_title for f in forbidden_seniority):
+            role_score = 25.0  # Heavily penalize over-seniority / architect roles
+        else:
+            role_score = 70.0
+            for r in cand_roles:
+                if r in job_title or any(w in job_title for w in r.split()):
+                    role_score = 95.0
+                    break
+            if any(term in job_title for term in ["ai engineer", "genai", "generative ai", "llm", "machine learning", "rag engineer", "agentic"]):
+                role_score = max(role_score, 90.0)
 
         # 4. Location / Remote (15%)
         job_loc = job.get("location", "").lower()

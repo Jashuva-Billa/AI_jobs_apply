@@ -11,41 +11,91 @@ T = TypeVar("T", bound=BaseModel)
 
 class LLMProvider:
     """
-    Unified LLM Provider abstraction supporting OpenAI, custom endpoints,
-    and intelligent heuristic/mock fallback when API keys are not supplied.
+    Resilient multi-provider LLM abstraction supporting Google Gemini (primary),
+    OpenAI (instant automatic failover on 503/429/errors), and deterministic fallback.
     """
-    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
-        self.api_key = api_key or settings.OPENAI_API_KEY
-        self.model = model or settings.LLM_MODEL
-        self.client = AsyncOpenAI(api_key=self.api_key) if self.api_key else None
+    def __init__(self):
+        self.gemini_key = settings.GEMINI_API_KEY
+        self.gemini_model = settings.GEMINI_MODEL or "gemini-1.5-flash"
+        self.gemini_client = AsyncOpenAI(
+            api_key=self.gemini_key,
+            base_url=settings.GEMINI_BASE_URL,
+            max_retries=0,
+            timeout=4.0
+        ) if self.gemini_key else None
+
+        self.openai_key = settings.OPENAI_API_KEY
+        self.openai_model = settings.effective_openai_model or "gpt-4o"
+        self.openai_client = AsyncOpenAI(
+            api_key=self.openai_key,
+            max_retries=0,
+            timeout=4.0
+        ) if self.openai_key else None
 
     async def generate_text(self, system_prompt: str, user_prompt: str, temperature: float = 0.2) -> str:
-        if self.client:
+        # 1. Try Primary (Google Gemini)
+        if self.gemini_client:
             try:
-                response = await self.client.chat.completions.create(
-                    model=self.model,
+                response = await self.gemini_client.chat.completions.create(
+                    model=self.gemini_model,
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt}
                     ],
                     temperature=temperature
                 )
-                return response.choices[0].message.content or ""
+                res = response.choices[0].message.content or ""
+                if res.strip():
+                    return res
             except Exception as e:
-                logger.warning(f"OpenAI call failed, falling back to local reasoning: {e}")
+                logger.warning(f"Gemini text generation failed ({e}). Automatically failing over to OpenAI...")
 
-        # Local heuristic fallback generator
+        # 2. Automatic Failover to OpenAI
+        if self.openai_client:
+            try:
+                response = await self.openai_client.chat.completions.create(
+                    model=self.openai_model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    temperature=temperature
+                )
+                res = response.choices[0].message.content or ""
+                if res.strip():
+                    return res
+            except Exception as e:
+                logger.warning(f"OpenAI fallback text generation failed ({e})")
+
+        # 3. Local heuristic fallback generator
         return self._fallback_text_generation(system_prompt, user_prompt)
 
     async def generate_structured(self, system_prompt: str, user_prompt: str, schema: Type[T]) -> T:
         """
-        Extracts structured data strictly adhering to a Pydantic schema using JSON mode or structured outputs.
+        Extracts structured data with automatic provider failover.
         """
-        if self.client:
+        # 1. Try Primary (Google Gemini)
+        if self.gemini_client:
             try:
-                # Use standard json_object response format
-                response = await self.client.chat.completions.create(
-                    model=self.model,
+                response = await self.gemini_client.chat.completions.create(
+                    model=self.gemini_model,
+                    messages=[
+                        {"role": "system", "content": f"{system_prompt}\n\nIMPORTANT: Respond strictly with valid JSON that matches this schema: {json.dumps(schema.model_json_schema())}"},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0.1
+                )
+                content = response.choices[0].message.content or "{}"
+                return schema.model_validate_json(content)
+            except Exception as e:
+                logger.warning(f"Structured Gemini extraction failed ({e}). Automatically failing over to OpenAI...")
+
+        # 2. Automatic Failover to OpenAI
+        if self.openai_client:
+            try:
+                response = await self.openai_client.chat.completions.create(
+                    model=self.openai_model,
                     messages=[
                         {"role": "system", "content": f"{system_prompt}\n\nIMPORTANT: Respond with valid JSON that matches the schema: {json.dumps(schema.model_json_schema())}"},
                         {"role": "user", "content": user_prompt}
@@ -56,7 +106,7 @@ class LLMProvider:
                 content = response.choices[0].message.content or "{}"
                 return schema.model_validate_json(content)
             except Exception as e:
-                logger.warning(f"Structured OpenAI extraction failed ({e}), falling back to heuristic parsing")
+                logger.warning(f"Structured OpenAI fallback failed ({e})")
 
         return self._fallback_structured_generation(system_prompt, user_prompt, schema)
 

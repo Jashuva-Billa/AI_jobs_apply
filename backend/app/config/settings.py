@@ -11,13 +11,18 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///./jobs_platform.db"
     
-    # OpenAI & LLM Configuration
+    # LLM Provider Configuration (Gemini Primary, OpenAI Optional)
+    LLM_PROVIDER: str = "gemini" # "gemini" or "openai"
+    GEMINI_API_KEY: Optional[str] = None
+    GEMINI_MODEL: str = "gemini-3.8-flash"
+    GEMINI_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    
     OPENAI_API_KEY: Optional[str] = None
-    OPENAI_MODEL: str = "gpt-4o-mini"
+    OPENAI_MODEL: str = "gpt-4o"
     LLM_MODEL: Optional[str] = None # Backward compatibility
     LLM_TEMPERATURE: float = 0.2
     
-    # OpenAI Web Search Configuration
+    # OpenAI Web Search Configuration (Optional)
     OPENAI_WEB_SEARCH_ENABLED: bool = True
     OPENAI_WEB_SEARCH_CONTEXT_SIZE: str = "high" # low, medium, high
     
@@ -64,7 +69,35 @@ class Settings(BaseSettings):
     )
 
     @property
+    def effective_llm_provider(self) -> str:
+        if self.GEMINI_API_KEY and self.LLM_PROVIDER == "gemini":
+            return "gemini"
+        if self.OPENAI_API_KEY:
+            return "openai"
+        if self.GEMINI_API_KEY:
+            return "gemini"
+        return "gemini"
+
+    @property
+    def effective_llm_api_key(self) -> Optional[str]:
+        if self.effective_llm_provider == "gemini":
+            return self.GEMINI_API_KEY
+        return self.OPENAI_API_KEY or self.GEMINI_API_KEY
+
+    @property
+    def effective_llm_base_url(self) -> Optional[str]:
+        if self.effective_llm_provider == "gemini":
+            return self.GEMINI_BASE_URL
+        return None
+
+    @property
+    def effective_llm_model(self) -> str:
+        if self.effective_llm_provider == "gemini":
+            return self.GEMINI_MODEL
+        return self.OPENAI_MODEL or self.LLM_MODEL or "gpt-4o"
+
+    @property
     def effective_openai_model(self) -> str:
-        return self.OPENAI_MODEL or self.LLM_MODEL or "gpt-4o-mini"
+        return self.OPENAI_MODEL or self.LLM_MODEL or "gpt-4o"
 
 settings = Settings()

@@ -27,10 +27,14 @@ TECHNICAL PROFILE & CORE STRENGTHS:
 - Backend & Cloud (Python, FastAPI, PostgreSQL, AWS Bedrock, AWS EKS, Lambda, S3, Docker, Kubernetes, CI/CD)
 - Observability (Langfuse, OpenTelemetry, Prometheus, Grafana, CloudWatch)
 
-EXPERIENCE FILTERING RULES:
-- Candidate has 2.9 years of experience.
-- Prioritize roles asking for 1–3, 2–4, 2–5, or 3–5 years.
-- Do NOT automatically reject 3+ year roles (candidate is only 0.1 year below), but clearly note experience alignment.
+EXPERIENCE & SENIORITY FILTERING RULES (STRICT):
+- Candidate has exactly 2.9 years of professional experience.
+- ONLY apply for roles asking for 2–3 years of experience (accepting 1–3, 2–3, or 2–4 years max).
+- STRICTLY REJECT & EXCLUDE:
+  * Any role with title containing "Architect", "Principal", "Director", "VP", "Head", "Staff", "Senior Staff", "Lead Architect", or "Chief".
+  * Any role requiring more than 3 years of experience (e.g. 4+, 5+, 6+, 7+, 8+ years).
+  * Executive, managerial, or ultra-senior leadership positions.
+- TARGET ROLES: Mid-level core AI Engineer, Generative AI Engineer, Applied AI Engineer, Agentic AI Engineer, LLM Engineer, RAG Engineer, AI Backend Engineer.
 - Prioritize: Software/Product companies, AI startups, SaaS companies hiring remotely in India or offering Hyderabad remote/hybrid.
 - Focus especially on roles involving: Agentic AI + RAG + LangGraph + MCP + Python/FastAPI + AWS/Bedrock.
 
@@ -100,24 +104,36 @@ Format response strictly as valid JSON:
 }
 """
 
+import datetime
+import uuid
+
 def build_job_research_prompt(criteria: SearchCriteria, queries: List[str], candidate: Optional[CandidateProfileBase] = None) -> str:
+    now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    session_nonce = uuid.uuid4().hex[:8]
     roles_str = ", ".join(criteria.roles) if criteria.roles else "AI Engineer, Generative AI Engineer, Agentic AI Engineer, RAG Engineer, LLM Engineer"
     skills_str = ", ".join(criteria.skills) if criteria.skills else "Python, LangGraph, RAG, MCP, AWS Bedrock, Milvus, FastAPI"
     loc_str = ", ".join(criteria.locations) if criteria.locations else "Remote India, Hyderabad"
     
     prompt = (
+        f"SEARCH EXECUTION METADATA:\n"
+        f"- Timestamp: {now_str}\n"
+        f"- Session Nonce: {session_nonce}\n\n"
         f"CANDIDATE DIRECTIVE:\n"
         f"Candidate: Jashuva Billa (AI Engineer based in Hyderabad, India, 2.9 years experience, Email: jashuvabilla@gmail.com)\n\n"
         f"TARGET SEARCH REQUIREMENTS:\n"
         f"- Target Roles: {roles_str}\n"
         f"- Core Focus: Agentic AI + RAG + LangGraph + MCP + Python/FastAPI + AWS Bedrock + Milvus\n"
         f"- Target Locations: {loc_str} (Remote-first India / Hyderabad hybrid / Global remote open to India)\n"
-        f"- Experience Bracket: 2.9 years (Prioritize 1-3, 2-4, 2-5, 3-5 years; do not reject 3+ years)\n"
-        f"- Portal Strategy: Search official company career portals and verified postings\n\n"
+        f"- Experience Bracket: Strictly 2–3 years (1-3, 2-3, 2-4 years max). Strictly DO NOT include Principal, Architect, Staff, or roles asking for >3 years.\n"
+        f"- Portal Strategy: Search official company career portals, direct ATS systems (Ashby, Greenhouse, Lever, Workday), and verified company postings\n\n"
+        f"SEARCH FRESHNESS & DIVERSITY MANDATE:\n"
+        f"1. Discover FRESH and DIVERSE job opportunities currently active and hiring. Do NOT repeat only previously seen static results.\n"
+        f"2. Explore emerging AI startups, high-growth tech companies, and enterprise engineering teams across Hyderabad and Remote-India.\n"
+        f"3. Verify active status, extract real company application links, and return structured JSON.\n\n"
         f"TARGET SEARCH QUERIES TO EXECUTE:\n"
     )
     for q in queries:
         prompt += f"• {q}\n"
 
-    prompt += "\nExecute web research across active career pages, verify currently open roles, and return structured JSON."
+    prompt += "\nExecute web research across active career pages, discover newly posted roles, verify they are currently open, and return structured JSON."
     return prompt

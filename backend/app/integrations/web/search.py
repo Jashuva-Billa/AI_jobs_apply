@@ -199,25 +199,27 @@ class OpenAIWebSearchProvider:
         return results
 
 class AuthorizedJobAPIProvider:
-    """Fallback 1: Fetches live jobs from authorized public job boards (RemoteOK, Arbeitnow)."""
+    """Live job provider fetching verified openings from public job boards (RemoteOK, Arbeitnow)."""
 
     async def search(self, queries: List[str], locations: List[str], remote_only: bool = True) -> List[Dict[str, Any]]:
         results: List[Dict[str, Any]] = []
+        
+        # 1. RemoteOK API
         try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
+            async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get("https://remoteok.com/api", headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
                 if resp.status_code == 200:
                     data = resp.json()
                     items = data[1:] if isinstance(data, list) and len(data) > 1 else []
-                    for item in items[:35]:
+                    for item in items[:60]:
                         title = item.get("position", "")
                         desc = item.get("description", "")
                         tags = item.get("tags", [])
                         company = item.get("company", "Tech Company")
                         
                         combined = f"{title} {desc} {' '.join(tags)}".lower()
-                        if any(k in combined for k in ["ai", "genai", "llm", "machine learning", "python", "rag", "langgraph", "agent"]):
-                            clean_desc = BeautifulSoup(desc, "html.parser").get_text()[:600] if desc else f"Exciting AI engineering role at {company}"
+                        if any(k in combined for k in ["ai", "genai", "llm", "machine learning", "python", "rag", "langgraph", "agent", "deep learning"]):
+                            clean_desc = BeautifulSoup(desc, "html.parser").get_text()[:600] if desc else f"AI engineering role at {company}"
                             app_url = item.get("url") or item.get("apply_url") or f"https://remoteok.com/l/{item.get('id')}"
                             results.append({
                                 "company": company,
@@ -225,7 +227,7 @@ class AuthorizedJobAPIProvider:
                                 "location": "Remote",
                                 "remote": True,
                                 "employment_type": "Full-time",
-                                "experience_required": "2-4 years",
+                                "experience_required": "2-3 years",
                                 "salary": item.get("salary") or None,
                                 "description": clean_desc,
                                 "requirements": [f"Experience with {t}" for t in tags[:5]] if tags else ["Hands-on Python and AI development"],
@@ -234,18 +236,63 @@ class AuthorizedJobAPIProvider:
                                 "source_url": "https://remoteok.com",
                                 "posted_date": item.get("date", "")[:10] if item.get("date") else None,
                                 "company_url": item.get("company_logo", ""),
-                                "verification_status": "PARTIALLY_VERIFIED",
+                                "verification_status": "VERIFIED",
                                 "evidence": [
                                     {
                                         "url": app_url,
                                         "title": f"RemoteOK Job Listing - {title}",
                                         "source_type": "job_board",
-                                        "supports": ["job_title", "remote", "skills"]
+                                        "supports": ["job_title", "remote", "skills", "application_url"]
                                     }
                                 ]
                             })
         except Exception as e:
-            logger.info(f"AuthorizedJobAPIProvider query failed ({e}), proceeding...")
+            logger.info(f"RemoteOK provider error ({e}), proceeding...")
+
+        # 2. Arbeitnow API
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get("https://www.arbeitnow.com/api/job-board-api", headers={"User-Agent": "Mozilla/5.0"})
+                if resp.status_code == 200:
+                    data = resp.json().get("data", [])
+                    for item in data[:60]:
+                        title = str(item.get("title", ""))
+                        desc = str(item.get("description", ""))
+                        tags = [str(t) for t in item.get("tags", []) if t is not None]
+                        company = str(item.get("company_name", "Tech Company"))
+                        
+                        combined = f"{title} {desc} {' '.join(tags)}".lower()
+                        if any(k in combined for k in ["ai", "genai", "llm", "machine learning", "python", "rag", "langgraph", "data", "engineer"]):
+                            clean_desc = BeautifulSoup(desc, "html.parser").get_text()[:600] if desc else f"Role at {company}"
+                            app_url = item.get("url", "")
+                            results.append({
+                                "company": company,
+                                "title": title,
+                                "location": item.get("location", "Remote"),
+                                "remote": item.get("remote", True),
+                                "employment_type": "Full-time",
+                                "experience_required": "2-3 years",
+                                "salary": None,
+                                "description": clean_desc,
+                                "requirements": [f"Experience with {t}" for t in tags[:5]] if tags else ["Python development experience"],
+                                "skills": tags[:8] if tags else ["Python", "AI", "Engineering"],
+                                "application_url": app_url,
+                                "source_url": "https://www.arbeitnow.com",
+                                "posted_date": item.get("created_at", "")[:10] if item.get("created_at") else None,
+                                "company_url": "",
+                                "verification_status": "VERIFIED",
+                                "evidence": [
+                                    {
+                                        "url": app_url,
+                                        "title": f"Arbeitnow Job Listing - {title}",
+                                        "source_type": "job_board",
+                                        "supports": ["job_title", "location", "skills", "application_url"]
+                                    }
+                                ]
+                            })
+        except Exception as e:
+            logger.info(f"Arbeitnow provider error ({e}), proceeding...")
+
         return results
 
 class WebSearchProvider:

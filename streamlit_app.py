@@ -107,16 +107,24 @@ def api_get(endpoint: str, params: Optional[dict] = None) -> Any:
         pass
     return None
 
+import urllib.parse
+
 def api_post(endpoint: str, json_data: Optional[dict] = None, files: Optional[dict] = None) -> Any:
     try:
         if files:
-            resp = requests.post(f"{API_BASE_URL}{endpoint}", files=files, timeout=60)
+            resp = requests.post(f"{API_BASE_URL}{endpoint}", files=files, timeout=300)
         else:
-            resp = requests.post(f"{API_BASE_URL}{endpoint}", json=json_data, timeout=60)
+            resp = requests.post(f"{API_BASE_URL}{endpoint}", json=json_data, timeout=300)
         if resp.status_code == 200:
             return resp.json()
-    except Exception:
-        pass
+        else:
+            st.error(f"Backend API Error ({resp.status_code}): {resp.text[:250]}")
+    except requests.exceptions.Timeout:
+        st.error("Backend request timed out (exceeded 300 seconds). The multi-agent pipeline is processing large batch batches.")
+    except requests.exceptions.ConnectionError:
+        st.error(f"Could not connect to Backend server at {API_BASE_URL}. Ensure FastAPI is running on port 8000.")
+    except Exception as e:
+        st.error(f"API request failed: {e}")
     return None
 
 def api_put(endpoint: str, json_data: dict) -> Any:
@@ -249,6 +257,7 @@ def check_linkedin_status() -> tuple[str, str]:
 
 # ----------------- Navigation Options -----------------
 NAV_OPTIONS = [
+    "⚡ MCP Server & ChatGPT Gateway",
     "🤖 AI Copilot & Search",
     "💼 Discovered Jobs Matrix",
     "🛡️ Human Approvals Center",
@@ -431,9 +440,121 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
 # ==============================================================================
+# VIEW 0: MCP SERVER & CHATGPT WEB GATEWAY (OPERATIONS DASHBOARD)
+# ==============================================================================
+if menu == "⚡ MCP Server & ChatGPT Gateway":
+    st.markdown("""
+    <div class="glass-card">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+            <div>
+                <h1 style="font-size: 26px; margin-bottom: 4px;">⚡ MCP Server & ChatGPT Web Operations Gateway</h1>
+                <p style="color: #94A3B8; font-size: 13px; margin: 0;">
+                    ChatGPT Web serves as your primary conversational AI agent. The local MCP server provides deterministic tools, live job discovery, 7-factor scoring, and human-in-the-loop action controls.
+                </p>
+            </div>
+            <div style="text-align: right;">
+                <span class="badge badge-brand" style="font-size: 13px; padding: 6px 14px;">Protocol: MCP 2.x SSE</span>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # 1. MCP Health & Connectivity Diagnostics
+    mcp_port = os.getenv("MCP_SERVER_PORT", "8001")
+    mcp_host = os.getenv("MCP_SERVER_HOST", "localhost")
+    mcp_public_url = os.getenv("MCP_PUBLIC_URL", "")
+    
+    mcp_healthy = False
+    mcp_data = {}
+    try:
+        resp = requests.get(f"http://localhost:{mcp_port}/health", timeout=3)
+        if resp.status_code == 200:
+            mcp_healthy = True
+            mcp_data = resp.json()
+    except Exception:
+        mcp_healthy = False
+
+    c_m1, c_m2, c_m3, c_m4 = st.columns(4)
+    with c_m1:
+        st.metric("MCP Server Status", "🟢 ONLINE" if mcp_healthy else "🔴 OFFLINE", f"Port {mcp_port}")
+    with c_m2:
+        st.metric("Registered Tools", mcp_data.get("registered_tools_count", 15), "Deterministic")
+    with c_m3:
+        st.metric("Transports", "/sse, /mcp", "Streamable HTTP")
+    with c_m4:
+        st.metric("OpenAI API Key Required", "NO (Free / MCP Mode)", "0 Credits Needed")
+
+    st.markdown("---")
+
+    # 2. ChatGPT Web Setup & Tunnel Guide
+    col_l, col_r = st.columns([3, 2])
+    with col_l:
+        st.subheader("🔗 ChatGPT Web Connection Endpoint")
+        if mcp_public_url:
+            current_endpoint = f"{mcp_public_url.rstrip('/')}/sse"
+        else:
+            current_endpoint = f"http://localhost:{mcp_port}/sse (Local) or ngrok HTTPS tunnel"
+
+        st.code(current_endpoint, language="text")
+        
+        st.markdown("""
+        **Quick Setup in ChatGPT Web:**
+        1. Open [ChatGPT Web (chatgpt.com)](https://chatgpt.com)
+        2. Go to **Settings** ➔ **Apps & Connectors** (or **Custom GPTs / Actions**)
+        3. Click **Add Custom MCP Server**
+        4. Enter your secure HTTPS tunnel URL (e.g. `https://your-domain.ngrok-free.app/sse`)
+        5. Scan and enable the **15 registered Job Platform tools**!
+        """)
+
+    with col_r:
+        st.subheader("🌐 Public Tunnel Helper")
+        st.markdown("Expose your local MCP server to ChatGPT Web with a single command:")
+        st.code(f"ngrok http {mcp_port}", language="bash")
+        st.caption("Copy the generated HTTPS URL and paste it into ChatGPT Web MCP Connector.")
+
+    st.markdown("---")
+
+    # 3. Registered MCP Tools Directory
+    st.subheader("🛠️ Registered Business MCP Tools")
+    
+    tools_list = [
+        {"name": "get_candidate_profile", "type": "Candidate", "action": "READ", "desc": "Fetches candidate factual profile, skills, and 2.9 YoE experience directly from SQL."},
+        {"name": "update_candidate_profile", "type": "Candidate", "action": "WRITE", "desc": "Updates target roles, locations, or technical tags in the candidate SQL record."},
+        {"name": "get_candidate_resume", "type": "Candidate", "action": "READ", "desc": "Returns full raw and parsed resume text for tailoring."},
+        {"name": "search_jobs", "type": "Job Search", "action": "DISCOVERY", "desc": "Searches live jobs across RemoteOK, Arbeitnow, and DuckDuckGo up to 100+ jobs."},
+        {"name": "get_search_run", "type": "Persistence", "action": "READ", "desc": "Retrieves durable SearchRun status, processing counters, and timestamps from SQL."},
+        {"name": "get_search_results", "type": "Persistence", "action": "READ", "desc": "Fetches paginated discovered jobs and match records for a search run."},
+        {"name": "match_jobs", "type": "Matching", "action": "COMPUTE", "desc": "Deterministic 7-factor scoring (Skills 30%, Exp 20%, Role 20%, Loc 15%, Cloud 5%, Edu 5%, Domain 5%)."},
+        {"name": "find_recruiter", "type": "Recruiter", "action": "DISCOVERY", "desc": "Discovers verified public recruiter/talent contacts without fabricating emails."},
+        {"name": "prepare_application", "type": "Application", "action": "WRITE", "desc": "Generates tailored resume, cover letter, and drafts; inserts PENDING approval in SQL."},
+        {"name": "prepare_applications_batch", "type": "Application", "action": "BATCH", "desc": "Parallel application package generation under bounded concurrency (max 10)."},
+        {"name": "get_pending_approvals", "type": "HITL Approval", "action": "READ", "desc": "Retrieves pending application approval requests awaiting human review."},
+        {"name": "approve_applications", "type": "HITL Approval", "action": "WRITE / ACTION", "desc": "Approves applications upon explicit user confirmation and sends authorized outreach."},
+        {"name": "reject_applications", "type": "HITL Approval", "action": "WRITE", "desc": "Marks application approval records as REJECTED in SQL."},
+        {"name": "send_approved_email", "type": "Outreach", "action": "ACTION", "desc": "Sends recruiter outreach email ONLY for APPROVED applications (Idempotent)."},
+        {"name": "prepare_linkedin_outreach", "type": "Outreach", "action": "READ / LINK", "desc": "Generates 100% compliant LinkedIn copy and direct recruiter profile search links."}
+    ]
+
+    t_cols = st.columns(3)
+    for i, t in enumerate(tools_list):
+        with t_cols[i % 3]:
+            action_color = "badge-success" if t["action"] == "READ" else "badge-brand" if "WRITE" in t["action"] or "BATCH" in t["action"] else "badge-warning"
+            st.markdown(f"""
+            <div class="glass-card" style="padding: 14px; min-height: 140px;">
+                <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px;">
+                    <strong style="font-size: 13px; color: #818CF8;"><code>{t['name']}</code></strong>
+                    <span class="badge {action_color}">{t['action']}</span>
+                </div>
+                <div style="font-size: 11px; color: #94A3B8; line-height: 1.4;">
+                    {t['desc']}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+# ==============================================================================
 # VIEW 1: AI COPILOT & SEARCH
 # ==============================================================================
-if menu == "🤖 AI Copilot & Search":
+elif menu == "🤖 AI Copilot & Search":
     st.markdown("""
     <div class="glass-card">
         <h1 style="font-size: 26px; margin-bottom: 8px;">Autonomous Job Search & Application Copilot</h1>
@@ -495,8 +616,7 @@ if menu == "🤖 AI Copilot & Search":
         "- Langfuse\n"
         "- OpenTelemetry\n"
         "- Prometheus/Grafana\n"
-        "- Guardrails, PII/PHI protection and HITL\n\n"
-        "I have 2.9 years of experience, so prioritize jobs asking for 1–3, 2–4, 2–5 or 3–5 years. Do not automatically reject 3+ year roles because I am only 0.1 year below the requirement, but clearly mark experience mismatches.\n\n"
+        "I have 2.9 years of experience. Apply ONLY for 2–3 year roles (1–3, 2–3, or 2–4 years max). Do NOT apply for Architect, Principal, Staff, Director, Lead Architect, or roles requiring more than 3 years of experience.\n\n"
         "I want you to search CURRENT company career portals directly, not just LinkedIn, Indeed, Naukri or generic job aggregators.\n\n"
         "Find active jobs that match my profile and provide:\n\n"
         "1. Company\n"
@@ -930,7 +1050,14 @@ elif menu == "🛡️ Human Approvals Center":
                     with col_li:
                         st.markdown("**LinkedIn Connection Request & Direct Message**")
                         li_text = st.text_area(f"Connection Note & Message ({idx})", value=linkedin_outreach.get("body", ""), height=200, key=f"li_{idx}")
-                        li_url = recruiter.get("linkedin_url") or f"https://www.linkedin.com/search/results/people/?keywords={job.get('company', '')}+technical+recruiter"
+                        raw_li = recruiter.get("linkedin_url")
+                        if raw_li and "linkedin.com/in/" in raw_li:
+                            li_url = raw_li if raw_li.startswith("http") else f"https://{raw_li}"
+                        else:
+                            c_name = job.get('company', '').strip()
+                            r_name = recruiter.get('name', '').strip()
+                            keywords = f"{c_name} {r_name}" if r_name and r_name != "Talent Team" else f"{c_name} technical recruiter"
+                            li_url = f"https://www.linkedin.com/search/results/people/?keywords={urllib.parse.quote(keywords)}"
                         st.link_button(f"🔗 Open Recruiter Profile on LinkedIn ({recruiter.get('name', 'Talent Team')})", url=li_url, use_container_width=True)
                         st.info("💡 1-Click Outreach: Click the button above to view the recruiter's profile, send a connection request, and paste this message.")
                 

@@ -26,21 +26,48 @@ class OpenAIWebResearchService:
     """
 
     def generate_search_queries(self, criteria: SearchCriteria) -> List[str]:
+        import random
         queries = []
-        roles = criteria.roles or ["AI Engineer", "GenAI Engineer", "ML Engineer"]
-        top_skills = criteria.skills[:3] if criteria.skills else ["Python", "RAG", "LangGraph"]
+        roles = criteria.roles or ["AI Engineer", "Generative AI Engineer", "Agentic AI Engineer", "Applied AI Engineer", "RAG Engineer", "LLM Engineer"]
+        top_skills = criteria.skills[:4] if criteria.skills else ["Python", "RAG", "LangGraph", "FastAPI"]
         skills_text = " ".join(top_skills)
-        loc = "remote India" if criteria.remote_required else "remote"
+        loc = "remote India" if criteria.remote_required else "India"
 
-        for role in roles:
+        # 1. Direct ATS Boards (Ashby, Greenhouse, Lever, Workday)
+        ats_queries = [
+            'site:jobs.ashbyhq.com ("AI Engineer" OR "GenAI" OR "Agentic AI") ("India" OR "Remote")',
+            'site:boards.greenhouse.io ("AI Engineer" OR "Generative AI" OR "RAG") ("India" OR "Remote")',
+            'site:jobs.lever.co ("Applied AI Engineer" OR "LLM Engineer") ("India" OR "Remote")',
+            'site:myworkdayjobs.com ("AI Engineer" OR "Generative AI") "India"',
+            'site:workatastartup.com ("AI Engineer" OR "LangGraph" OR "RAG") ("India" OR "Remote")'
+        ]
+
+        # 2. Targeted Role + Tech Stack queries
+        stack_queries = [
+            f'"Agentic AI Engineer" ("LangGraph" OR "MCP" OR "Python") {loc} careers',
+            f'"RAG Engineer" ("Milvus" OR "Bedrock" OR "FastAPI") {loc} apply',
+            f'"Applied AI Engineer" ("LLM" OR "RAGAS" OR "DeepEval") {loc}',
+            f'"Generative AI Engineer" {skills_text} ("Remote India" OR "Hyderabad") careers',
+            f'"AI Backend Engineer" "FastAPI" "Python" ("AWS" OR "Bedrock") {loc}',
+            f'"AI Engineer" "Hyderabad" ("hybrid" OR "remote") "apply now"'
+        ]
+
+        # 3. Startup & Fresh Hiring Portals
+        startup_queries = [
+            f'AI startup hiring "AI Engineer" ("Remote India" OR "Hyderabad") 2025 OR 2026',
+            f'SaaS company "Generative AI Engineer" ("India" OR "Remote") career page',
+            f'"LangGraph" OR "Agentic AI" developer jobs India remote',
+            f'"LLM-as-a-Judge" OR "RAGAS" AI Engineer careers India'
+        ]
+
+        # Combine, shuffle subset, and deduplicate
+        all_pools = ats_queries + stack_queries + startup_queries
+        random.shuffle(all_pools)
+        queries.extend(all_pools[:10])
+
+        for role in roles[:3]:
             queries.append(f'"{role}" {skills_text} {loc} careers')
-            queries.append(f'"{role}" company career page apply {loc}')
-            queries.append(f'"{role}" "apply now" {loc}')
 
-        queries.append(f'"Agentic AI Engineer" {skills_text} {loc}')
-        queries.append(f'"RAG" "LangGraph" Engineer {loc}')
-        
-        # Deduplicate queries preserving order
         return list(dict.fromkeys(queries))
 
     async def search_jobs(
