@@ -42,8 +42,11 @@ frontend/.vite/
 
 # Environment and Secrets
 .env
-.env.local
-.env.*.local
+.env.*
+*.env
+**/.env
+**/.env.*
+!.env.example
 *.pem
 *.key
 
