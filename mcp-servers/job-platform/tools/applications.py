@@ -36,6 +36,22 @@ async def _prepare_single_application_task(
             try:
                 job_dict = {c.name: getattr(job_entity, c.name) for c in job_entity.__table__.columns}
                 
+                # Check for Duplicate Application
+                from app.services.duplicate_protection import duplicate_protection
+                is_dup, existing_app_id, dup_reason = await duplicate_protection.check_duplicate_job(
+                    session, cand_schema.id, job_dict
+                )
+                if is_dup:
+                    logger.info(f"Duplicate application detected for {job_entity.company}: {dup_reason}")
+                    return {
+                        "status": "SKIPPED_ALREADY_PROCESSED",
+                        "job_id": job_entity.id,
+                        "company": job_entity.company,
+                        "title": job_entity.title,
+                        "existing_application_id": existing_app_id,
+                        "message": f"Application skipped because this role was already processed ({dup_reason})."
+                    }
+
                 # 1. Discover recruiter if not existing
                 r_res = await session.execute(select(Recruiter).filter_by(company_name=job_entity.company).limit(1))
                 rec_entity = r_res.scalars().first()
@@ -77,9 +93,34 @@ async def _prepare_single_application_task(
                     app_rec.run_id = run_id
                     app_rec.status = ApplicationStatus.REVIEW_REQUIRED
 
-                # 4. Generate Outreach Messages (Email & LinkedIn)
+                # 4. Generate Outreach Messages (Email & LinkedIn) with provenance
                 email_out = await outreach_service.generate_recruiter_email(cand_schema, job_dict, rec_obj)
                 li_out = await outreach_service.generate_linkedin_outreach(cand_schema, job_dict, rec_obj)
+
+                # Pre-send safety check
+                from app.services.email_resolution_service import validate_recipient_before_send, RecipientClassification
+                is_send_allowed, safety_status, block_reason = validate_recipient_before_send(
+                    job_dict, email_out.recipient_email, email_out.email_status, email_out.email_source, cand_schema.id, app_id
+                )
+
+                # Structured Logging as required
+                logger.info(
+                    f"\n--- APPLICATION PREPARATION AUDIT ---\n"
+                    f"JOB_ID={job_entity.id}\n"
+                    f"CANONICAL_JOB_ID={job_entity.canonical_job_id}\n"
+                    f"COMPANY={job_entity.company}\n"
+                    f"JOB_TITLE={job_entity.title}\n"
+                    f"EMAIL={email_out.recipient_email}\n"
+                    f"EMAIL_SOURCE={email_out.email_source}\n"
+                    f"EMAIL_STATUS={email_out.email_status}\n"
+                    f"EMAIL_CONFIDENCE={email_out.email_confidence}\n"
+                    f"RECRUITER_NAME={email_out.recipient_name}\n"
+                    f"RECRUITER_STATUS={email_out.recruiter_status}\n"
+                    f"SEND_ALLOWED={is_send_allowed}\n"
+                    f"SAFETY_STATUS={safety_status}\n"
+                    f"BLOCK_REASON={block_reason if not is_send_allowed else 'NONE'}\n"
+                    f"--------------------------------------"
+                )
 
                 # Save Outreach Messages
                 o_res = await session.execute(select(OutreachMessage).filter_by(application_id=app_id, channel="EMAIL"))
@@ -91,13 +132,23 @@ async def _prepare_single_application_task(
                         channel="EMAIL",
                         subject=email_out.subject,
                         body=email_out.body,
-                        recipient_email=email_out.recipient_email or (rec_obj.public_email if rec_obj else None),
-                        recipient_name=rec_obj.name if rec_obj else "Hiring Team",
+                        recipient_email=email_out.recipient_email,
+                        recipient_name=email_out.recipient_name,
+                        email_status=email_out.email_status,
+                        email_source=email_out.email_source,
+                        email_confidence=email_out.email_confidence,
+                        recruiter_status=email_out.recruiter_status,
                         status="DRAFT"
                     ))
                 else:
                     existing_email.subject = email_out.subject
                     existing_email.body = email_out.body
+                    existing_email.recipient_email = email_out.recipient_email
+                    existing_email.recipient_name = email_out.recipient_name
+                    existing_email.email_status = email_out.email_status
+                    existing_email.email_source = email_out.email_source
+                    existing_email.email_confidence = email_out.email_confidence
+                    existing_email.recruiter_status = email_out.recruiter_status
 
                 o_li_res = await session.execute(select(OutreachMessage).filter_by(application_id=app_id, channel="LINKEDIN"))
                 existing_li = o_li_res.scalars().first()
@@ -108,12 +159,15 @@ async def _prepare_single_application_task(
                         channel="LINKEDIN",
                         subject=li_out.subject,
                         body=li_out.body,
-                        recipient_name=rec_obj.name if rec_obj else "Hiring Team",
+                        recipient_name=li_out.recipient_name,
+                        recruiter_status=li_out.recruiter_status,
                         status="DRAFT"
                     ))
                 else:
                     existing_li.subject = li_out.subject
                     existing_li.body = li_out.body
+                    existing_li.recipient_name = li_out.recipient_name
+                    existing_li.recruiter_status = li_out.recruiter_status
 
                 # 5. Save Application Questions
                 if app_pkg_dto.questions:
@@ -146,15 +200,32 @@ async def _prepare_single_application_task(
                     "questions": [q.model_dump() if hasattr(q, "model_dump") else dict(q) for q in (app_pkg_dto.questions or [])],
                     "match_score": app_pkg_dto.match.overall_score if app_pkg_dto.match else None,
                     "match_recommendation": app_pkg_dto.match.recommendation if app_pkg_dto.match else None,
+                    "recruiter": {
+                        "name": email_out.recipient_name,
+                        "email": email_out.recipient_email,
+                        "email_status": email_out.email_status,
+                        "email_source": email_out.email_source,
+                        "confidence": email_out.email_confidence,
+                        "send_allowed": is_send_allowed
+                    },
                     "email_outreach": {
                         "subject": email_out.subject,
                         "body": email_out.body,
-                        "recipient_email": email_out.recipient_email or (rec_obj.public_email if rec_obj else None)
+                        "recipient_email": email_out.recipient_email,
+                        "recipient_name": email_out.recipient_name,
+                        "email_status": email_out.email_status,
+                        "email_source": email_out.email_source,
+                        "email_confidence": email_out.email_confidence,
+                        "recruiter_status": email_out.recruiter_status,
+                        "send_allowed": is_send_allowed
                     },
                     "linkedin_outreach": {
                         "subject": li_out.subject,
-                        "body": li_out.body
-                    }
+                        "body": li_out.body,
+                        "recipient_name": li_out.recipient_name
+                    },
+                    "send_allowed": is_send_allowed,
+                    "safety_status": safety_status
                 }
 
                 if not approval_req:
@@ -186,9 +257,15 @@ async def _prepare_single_application_task(
                     "tailored_resume_summary": app_pkg_dto.tailored_resume_summary,
                     "cover_letter": app_pkg_dto.cover_letter,
                     "highlighted_skills": app_pkg_dto.highlighted_skills,
-                    "email_recipient": email_out.recipient_email or (rec_obj.public_email if rec_obj else None),
-                    "recruiter_name": rec_obj.name if rec_obj else "Talent Team",
-                    "message": f"Application package successfully prepared for {job_entity.title} at {job_entity.company}. Approval record {approval_id} is in PENDING status awaiting user review."
+                    "email_recipient": email_out.recipient_email,
+                    "email_status": email_out.email_status,
+                    "email_source": email_out.email_source,
+                    "email_confidence": email_out.email_confidence,
+                    "recruiter_name": email_out.recipient_name,
+                    "recruiter_status": email_out.recruiter_status,
+                    "send_allowed": is_send_allowed,
+                    "safety_status": safety_status,
+                    "message": f"Application package successfully prepared for {job_entity.title} at {job_entity.company}. Recruiter email status: {email_out.email_status}. Send allowed: {is_send_allowed}. Approval record {approval_id} is in PENDING status awaiting user review."
                 }
             except Exception as e:
                 logger.error(f"Failed preparing application for {job_entity.company}: {e}", exc_info=True)

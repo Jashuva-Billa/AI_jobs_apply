@@ -2,6 +2,7 @@ import logging
 from typing import Dict, Any, Optional
 from app.schemas.schemas import CandidateProfileBase, OutreachMessageBase, RecruiterBase
 from app.integrations.llm.provider import llm_provider
+from app.services.email_resolution_service import email_resolution_service
 
 logger = logging.getLogger(__name__)
 
@@ -12,9 +13,15 @@ class OutreachGenerationService:
         self,
         candidate: CandidateProfileBase,
         job: Dict[str, Any],
-        recruiter: Optional[RecruiterBase]
+        recruiter: Optional[RecruiterBase] = None
     ) -> OutreachMessageBase:
-        recruiter_salutation = f"Hi {recruiter.name.split()[0]}" if recruiter and recruiter.name else "Hi"
+        # Dynamically resolve and verify recruiter contact for this specific job
+        resolution = email_resolution_service.resolve_recruiter_contact(job, recruiter)
+        
+        display_recruiter_name = resolution.recruiter_name or "Hiring Team"
+        salutation_target = resolution.recruiter_name.split()[0] if resolution.recruiter_name else "Hiring Team"
+        recruiter_salutation = f"Hi {salutation_target}" if salutation_target != "Hiring Team" else "Dear Hiring Team"
+        
         company = job.get("company", "the team")
         job_title = job.get("title", "Applied AI Engineer")
 
@@ -33,7 +40,7 @@ class OutreachGenerationService:
         user_prompt = (
             f"Target Company: {company}\n"
             f"Target Role: {job_title}\n"
-            f"Recruiter: {recruiter.name if recruiter else 'Hiring Team'}"
+            f"Recruiter: {display_recruiter_name}"
         )
 
         body = await llm_provider.generate_text(system_prompt, user_prompt)
@@ -63,23 +70,28 @@ class OutreachGenerationService:
             channel="EMAIL",
             subject=subject,
             body=body.strip(),
-            recipient_email=recruiter.public_email if recruiter else None,
-            recipient_name=recruiter.name if recruiter else "Hiring Team"
+            recipient_email=resolution.email,
+            recipient_name=display_recruiter_name,
+            email_status=resolution.status,
+            email_source=resolution.source,
+            email_confidence=resolution.confidence,
+            recruiter_status=resolution.recruiter_status
         )
 
     async def generate_linkedin_outreach(
         self,
         candidate: CandidateProfileBase,
         job: Dict[str, Any],
-        recruiter: Optional[RecruiterBase]
+        recruiter: Optional[RecruiterBase] = None
     ) -> OutreachMessageBase:
-        recruiter_name = recruiter.name.split()[0] if recruiter and recruiter.name else "there"
+        resolution = email_resolution_service.resolve_recruiter_contact(job, recruiter)
+        recruiter_salutation = resolution.recruiter_name.split()[0] if resolution.recruiter_name else "there"
         company = job.get("company", "the team")
         job_title = job.get("title", "AI Engineer")
 
         # LinkedIn messages should be strictly under 300 characters for connection requests
         body = (
-            f"Hi {recruiter_name}, I saw the {job_title} opening at {company}. "
+            f"Hi {recruiter_salutation}, I saw the {job_title} opening at {company}. "
             f"With hands-on experience building multi-agent systems and RAG pipelines in Python & LangGraph, "
             f"I'd love to connect and share my background for the team!"
         )
@@ -89,7 +101,12 @@ class OutreachGenerationService:
             subject=f"Connect on {job_title} role at {company}",
             body=body,
             recipient_email=None,
-            recipient_name=recruiter.name if recruiter else "Hiring Manager"
+            recipient_name=resolution.recruiter_name or "Hiring Team",
+            email_status="NOT_FOUND",
+            email_source=None,
+            email_confidence=0.0,
+            recruiter_status=resolution.recruiter_status
         )
 
 outreach_service = OutreachGenerationService()
+

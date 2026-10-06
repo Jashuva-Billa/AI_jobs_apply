@@ -86,6 +86,9 @@ class JobBase(BaseModel):
     application_url: Optional[str] = None
     source_url: Optional[str] = None
     source_urls: List[str] = Field(default_factory=list)
+    recruiter_email: Optional[str] = None
+    application_email: Optional[str] = None
+    contact_email: Optional[str] = None
     posted_date: Optional[str] = None
     company_url: Optional[str] = None
     verification_status: str = "VERIFIED" # VERIFIED, PARTIALLY_VERIFIED, UNVERIFIED, EXPIRED
@@ -141,6 +144,10 @@ class OutreachMessageBase(BaseModel):
     body: str
     recipient_email: Optional[str] = None
     recipient_name: Optional[str] = None
+    email_status: str = "NOT_FOUND" # VERIFIED, UNVERIFIED, NOT_FOUND, INVALID, REJECTED, BLOCKED_INVALID_RECIPIENT
+    email_source: Optional[str] = None # job_source, job_description, application_page, official_careers_page, verified_recruiter
+    email_confidence: float = 0.0
+    recruiter_status: str = "NOT_FOUND" # VERIFIED, UNVERIFIED, NOT_FOUND
 
 class OutreachMessageResponse(OutreachMessageBase):
     id: str

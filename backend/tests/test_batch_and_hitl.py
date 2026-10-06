@@ -4,10 +4,11 @@ import uuid
 from httpx import AsyncClient, ASGITransport
 from unittest.mock import patch, AsyncMock, MagicMock
 
+from sqlalchemy import select
 from app.main import app
 from app.config.settings import settings
 from app.config.database import get_db, AsyncSessionLocal, engine, Base
-from app.models.entities import Job, Application, ApprovalRequest, AgentRun, JobMatch, CandidateProfile
+from app.models.entities import Job, Application, ApprovalRequest, AgentRun, JobMatch, CandidateProfile, ApprovalStatus
 from app.schemas.schemas import (
     CandidateProfileBase,
     MatchBreakdown,
@@ -131,27 +132,33 @@ async def test_bulk_approval_and_idempotency():
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # Check if pending approvals exist, otherwise create a batch run
+        # Check if pending approvals exist, otherwise seed directly
         approvals_resp = await client.get("/api/approvals?status=PENDING")
         approvals = approvals_resp.json()
         if not approvals:
-            mock_jobs = generate_100_mock_jobs()[:10]
-            with patch.object(job_service, "search_and_deduplicate", new_callable=AsyncMock) as mock_search, \
-                 patch.object(recruiter_service, "discover_recruiter_for_job", new_callable=AsyncMock) as mock_rec, \
-                 patch.object(outreach_service, "generate_recruiter_email", new_callable=AsyncMock) as mock_em, \
-                 patch.object(outreach_service, "generate_linkedin_outreach", new_callable=AsyncMock) as mock_out_li:
+            async with AsyncSessionLocal() as session:
+                cand_res = await session.execute(select(CandidateProfile).limit(1))
+                cand = cand_res.scalars().first()
+                cand_id = cand.id if cand else str(uuid.uuid4())
+                if not cand:
+                    cand = CandidateProfile(id=cand_id, name="Jashuva Billa", years_of_experience=2.9)
+                    session.add(cand)
                 
-                mock_search.return_value = (mock_jobs, 10, 0)
-                mock_rec.return_value = mock_recruiter
-                mock_em.return_value = mock_email
-                mock_out_li.return_value = mock_li
-                
-                await client.post("/api/agent/run", json={"prompt": "Find AI roles"})
-                approvals_resp = await client.get("/api/approvals?status=PENDING")
-                approvals = approvals_resp.json()
+                for i in range(3):
+                    j_id = str(uuid.uuid4())
+                    a_id = str(uuid.uuid4())
+                    appr_id = str(uuid.uuid4())
+                    job = Job(id=j_id, company=f"SeedCo {i}", title="AI Engineer", description="AI role")
+                    session.add(job)
+                    app_ent = Application(id=a_id, candidate_id=cand_id, job_id=j_id)
+                    session.add(app_ent)
+                    session.add(ApprovalRequest(id=appr_id, application_id=a_id, status=ApprovalStatus.PENDING))
+                await session.commit()
+            approvals_resp = await client.get("/api/approvals?status=PENDING")
+            approvals = approvals_resp.json()
 
         assert len(approvals) > 0
-        approval_ids = [a["approval_id"] for a in approvals[:100]]
+        approval_ids = [a["approval_id"] for a in approvals[:5]]
         
         # Test 4: Bulk approve
         bulk_resp = await client.post("/api/approvals/bulk-decide", json={

@@ -126,25 +126,39 @@ async def approve_applications(approval_ids: List[str]) -> Dict[str, Any]:
                 req.approved_at = datetime.datetime.utcnow()
                 app.status = ApplicationStatus.APPROVED
 
-                # 1. Dispatch Email Outreach if present
+                # 1. Dispatch Email Outreach if present with safety gate
+                from app.services.email_resolution_service import validate_recipient_before_send, RecipientClassification
                 email_status = None
                 o_res = await session.execute(select(OutreachMessage).filter_by(application_id=app.id, channel="EMAIL"))
                 email_out = o_res.scalars().first()
                 if email_out and email_out.recipient_email:
-                    try:
-                        email_res = await email_provider.send_email(
-                            to_email=email_out.recipient_email,
-                            subject=email_out.subject or f"Application for {job.title if job else 'AI Engineer'}",
-                            body=email_out.body,
-                            idempotency_key=f"{app.id}_email_approved"
-                        )
-                        email_out.status = "SENT"
-                        email_out.sent_at = datetime.datetime.utcnow()
-                        app.status = ApplicationStatus.RECRUITER_CONTACTED
-                        email_status = email_res
-                    except Exception as em_err:
+                    target_email = email_out.recipient_email.strip()
+                    job_dict = {c.name: getattr(job, c.name) for c in job.__table__.columns} if job else {}
+                    
+                    is_allowed, safety_status, block_reason = validate_recipient_before_send(
+                        job_dict, target_email, email_out.email_status, email_out.email_source, app.candidate_id, app.id
+                    )
+                    
+                    if not is_allowed:
+                        email_out.email_status = RecipientClassification.BLOCKED_INVALID_RECIPIENT
                         email_out.status = "FAILED"
-                        email_status = {"error": str(em_err)}
+                        email_status = {"status": "BLOCKED_INVALID_RECIPIENT", "error": f"Sending blocked: {block_reason}"}
+                    else:
+                        try:
+                            email_res = await email_provider.send_email(
+                                to_email=target_email,
+                                subject=email_out.subject or f"Application for {job.title if job else 'AI Engineer'}",
+                                body=email_out.body,
+                                idempotency_key=f"{app.id}_email_approved"
+                            )
+                            email_out.status = "SENT"
+                            email_out.email_status = "VERIFIED"
+                            email_out.sent_at = datetime.datetime.utcnow()
+                            app.status = ApplicationStatus.RECRUITER_CONTACTED
+                            email_status = email_res
+                        except Exception as em_err:
+                            email_out.status = "FAILED"
+                            email_status = {"error": str(em_err)}
                 else:
                     email_status = {"status": "SKIPPED_NO_RECIPIENT_EMAIL"}
 
@@ -161,11 +175,13 @@ async def approve_applications(approval_ids: List[str]) -> Dict[str, Any]:
                             recipient_url=rec_obj.linkedin_url if rec_obj else None,
                             message=li_out.body
                         )
-                        li_out.status = "SENT"
-                        li_out.sent_at = datetime.datetime.utcnow()
-                        linkedin_status = {"status": "PREPARED_AND_SENT", "action": li_action}
-                        if app.status != ApplicationStatus.RECRUITER_CONTACTED:
-                            app.status = ApplicationStatus.RECRUITER_CONTACTED
+                        li_out.status = "MANUAL_REQUIRED"
+                        li_out.sent_at = None
+                        linkedin_status = {
+                            "status": "MANUAL_REQUIRED",
+                            "action": li_action,
+                            "notice": "LinkedIn message copy prepared. Manual dispatch required via the provided direct profile link."
+                        }
                     except Exception as li_err:
                         li_out.status = "FAILED"
                         linkedin_status = {"error": str(li_err)}

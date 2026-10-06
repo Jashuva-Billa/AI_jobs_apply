@@ -188,30 +188,31 @@ class ApplicationPackageService:
         cover_letter = await self.generate_cover_letter(candidate, job, match)
         questions = self.prepare_application_questions(candidate, job)
 
+        from app.services.email_resolution_service import email_resolution_service, sanitize_recruiter_name
+
         rec_dto = None
-        if recruiter:
-            if isinstance(recruiter, dict):
-                rec_dto = RecruiterResponse(
-                    id=recruiter.get("id") or str(uuid.uuid4()),
-                    name=recruiter.get("name", "Hiring Team"),
-                    title=recruiter.get("title", "Technical Recruiter"),
-                    company_name=recruiter.get("company_name", job.get("company", "")),
-                    public_email=recruiter.get("public_email"),
-                    linkedin_url=recruiter.get("linkedin_url"),
-                    source_evidence=recruiter.get("source_evidence"),
-                    created_at=recruiter.get("created_at") or datetime.utcnow()
-                )
-            elif hasattr(recruiter, "name"):
-                rec_dto = RecruiterResponse(
-                    id=getattr(recruiter, "id", "") or str(uuid.uuid4()),
-                    name=getattr(recruiter, "name", "Hiring Team"),
-                    title=getattr(recruiter, "title", "Technical Recruiter"),
-                    company_name=getattr(recruiter, "company_name", job.get("company", "")),
-                    public_email=getattr(recruiter, "public_email", None),
-                    linkedin_url=getattr(recruiter, "linkedin_url", None),
-                    source_evidence=getattr(recruiter, "source_evidence", None),
-                    created_at=getattr(recruiter, "created_at", None) or datetime.utcnow()
-                )
+        resolution = email_resolution_service.resolve_recruiter_contact(job, recruiter)
+        
+        if recruiter or resolution.email:
+            company_name = job.get("company", "")
+            raw_name = recruiter.get("name") if isinstance(recruiter, dict) else getattr(recruiter, "name", None) if recruiter else None
+            clean_name, _ = sanitize_recruiter_name(raw_name, company_name)
+            
+            rec_id = (recruiter.get("id") if isinstance(recruiter, dict) else getattr(recruiter, "id", None)) if recruiter else str(uuid.uuid4())
+            rec_title = (recruiter.get("title") if isinstance(recruiter, dict) else getattr(recruiter, "title", "Technical Recruiter")) if recruiter else "Technical Recruiter"
+            rec_li = (recruiter.get("linkedin_url") if isinstance(recruiter, dict) else getattr(recruiter, "linkedin_url", None)) if recruiter else f"https://www.linkedin.com/search/results/people/?keywords={company_name}+technical+recruiter"
+            rec_evidence = (recruiter.get("source_evidence") if isinstance(recruiter, dict) else getattr(recruiter, "source_evidence", None)) if recruiter else resolution.validation_reason
+
+            rec_dto = RecruiterResponse(
+                id=rec_id or str(uuid.uuid4()),
+                name=clean_name or f"Talent Team at {company_name}",
+                title=rec_title or "Technical Recruiter",
+                company_name=company_name,
+                public_email=resolution.email,
+                linkedin_url=rec_li,
+                source_evidence=rec_evidence,
+                created_at=datetime.utcnow()
+            )
 
         job_dto = None
         if isinstance(job, dict):

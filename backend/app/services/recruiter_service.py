@@ -5,6 +5,8 @@ from app.config.settings import settings
 
 from app.integrations.openai.web_research import openai_web_research
 
+from app.services.email_resolution_service import sanitize_recruiter_name, validate_company_domain
+
 logger = logging.getLogger(__name__)
 
 # Verified public talent acquisition contacts for known tech companies with evidence
@@ -63,58 +65,82 @@ class RecruiterDiscoveryService:
     """Discovers verifiable recruiters and talent partners without fabricating emails."""
 
     async def discover_recruiter_for_job(self, company_name: str, job_title: str) -> Optional[RecruiterBase]:
-        # 1. Check known verified directory first
+        company_clean = company_name.strip()
+
+        # 1. Check known verified directory first (exact or substring match)
         for key, data in KNOWN_RECRUITERS.items():
-            if key.lower() in company_name.lower() or company_name.lower() in key.lower():
-                return RecruiterBase(**data)
+            if key.lower() == company_clean.lower() or (len(company_clean) > 4 and company_clean.lower() in key.lower()):
+                clean_name, _ = sanitize_recruiter_name(data.get("name"), company_clean)
+                valid_email = data.get("public_email")
+                if valid_email:
+                    is_val, _ = validate_company_domain(valid_email, company_clean)
+                    if not is_val:
+                        valid_email = None
+                return RecruiterBase(
+                    name=clean_name or f"Talent Team at {company_clean}",
+                    title=data.get("title", "Technical Recruiter"),
+                    company_name=company_clean,
+                    public_email=valid_email,
+                    linkedin_url=data.get("linkedin_url"),
+                    source_evidence=data.get("source_evidence")
+                )
 
         # 2. OpenAI Web Research for recruiters (Live web intelligence)
         if not settings.DEMO_MODE and settings.OPENAI_WEB_SEARCH_ENABLED:
             try:
-                recruiter_res = await openai_web_research.research_recruiter(company_name, job_title)
+                recruiter_res = await openai_web_research.research_recruiter(company_clean, job_title)
                 if recruiter_res and recruiter_res.name:
-                    logger.info(f"OpenAI Web Search discovered recruiter: {recruiter_res.name} at {company_name}")
-                    return RecruiterBase(
-                        name=recruiter_res.name,
-                        title=recruiter_res.title or "Technical Recruiter",
-                        company_name=recruiter_res.company or company_name,
-                        public_email=recruiter_res.email, # Only returned if verified from source!
-                        linkedin_url=recruiter_res.linkedin_url or f"https://www.linkedin.com/search/results/people/?keywords={company_name}+technical+recruiter",
-                        source_evidence=recruiter_res.source_url or f"OpenAI Web Research for {company_name}"
-                    )
+                    clean_name, status = sanitize_recruiter_name(recruiter_res.name, company_clean)
+                    valid_email = recruiter_res.email
+                    if valid_email:
+                        is_val, _ = validate_company_domain(valid_email, company_clean)
+                        if not is_val:
+                            valid_email = None
+
+                    if clean_name:
+                        logger.info(f"OpenAI Web Search discovered recruiter: {clean_name} at {company_clean}")
+                        return RecruiterBase(
+                            name=clean_name,
+                            title=recruiter_res.title or "Technical Recruiter",
+                            company_name=company_clean,
+                            public_email=valid_email,
+                            linkedin_url=recruiter_res.linkedin_url or f"https://www.linkedin.com/search/results/people/?keywords={company_clean}+technical+recruiter",
+                            source_evidence=recruiter_res.source_url or f"OpenAI Web Research for {company_clean}"
+                        )
             except Exception as e:
-                logger.info(f"OpenAI recruiter research fallback for {company_name}: {e}")
+                logger.info(f"OpenAI recruiter research fallback for {company_clean}: {e}")
 
         # 3. Live Web Search for public recruiter profiles if not in demo mode
         if not settings.DEMO_MODE:
             try:
                 from duckduckgo_search import DDGS
                 ddgs = DDGS()
-                query = f'"{company_name}" "technical recruiter" OR "talent acquisition" site:linkedin.com/in'
+                query = f'"{company_clean}" "technical recruiter" OR "talent acquisition" site:linkedin.com/in'
                 results = list(ddgs.text(query, max_results=3))
                 if results:
-                    top_result = results[0]
-                    title_text = top_result.get("title", "")
-                    link = top_result.get("href", "")
-                    
-                    # Heuristically parse name: "Jane Doe - Technical Recruiter - Company | LinkedIn"
-                    name_parts = title_text.split(" - ") if " - " in title_text else title_text.split(" | ") if " | " in title_text else [title_text]
-                    recruiter_name = name_parts[0].replace("LinkedIn", "").strip() or f"Talent Partner at {company_name}"
-                    recruiter_title = name_parts[1].strip() if len(name_parts) > 1 else "Technical Recruiter"
-
-                    return RecruiterBase(
-                        name=recruiter_name,
-                        title=recruiter_title,
-                        company_name=company_name,
-                        public_email=None, # NEVER GUESS OR HALLUCINATE EMAILS!
-                        linkedin_url=link if "linkedin.com" in link else f"https://www.linkedin.com/search/results/people/?keywords={company_name}+technical+recruiter",
-                        source_evidence=f"Public search: {top_result.get('body', '')[:120]}"
-                    )
+                    for top_result in results:
+                        title_text = top_result.get("title", "")
+                        link = top_result.get("href", "")
+                        
+                        # Heuristically parse name: "Jane Doe - Technical Recruiter - Company | LinkedIn"
+                        name_parts = title_text.split(" - ") if " - " in title_text else title_text.split(" | ") if " | " in title_text else [title_text]
+                        raw_name = name_parts[0].replace("LinkedIn", "").strip()
+                        clean_name, status = sanitize_recruiter_name(raw_name, company_clean)
+                        
+                        if clean_name and status == "VERIFIED":
+                            recruiter_title = name_parts[1].strip() if len(name_parts) > 1 else "Technical Recruiter"
+                            return RecruiterBase(
+                                name=clean_name,
+                                title=recruiter_title,
+                                company_name=company_clean,
+                                public_email=None, # NEVER GUESS OR HALLUCINATE EMAILS!
+                                linkedin_url=link if "linkedin.com" in link else f"https://www.linkedin.com/search/results/people/?keywords={company_clean}+technical+recruiter",
+                                source_evidence=f"Public search: {top_result.get('body', '')[:120]}"
+                            )
             except Exception as e:
-                logger.info(f"Live recruiter search fallback for {company_name}: {e}")
+                logger.info(f"Live recruiter search fallback for {company_clean}: {e}")
 
-        # 3. Fallback verified company talent partner placeholder with direct search link
-        company_clean = company_name.strip()
+        # 4. Fallback verified company talent partner placeholder with direct search link
         return RecruiterBase(
             name=f"Talent Team at {company_clean}",
             title="Technical Recruiting & Talent Acquisition",
@@ -125,3 +151,4 @@ class RecruiterDiscoveryService:
         )
 
 recruiter_service = RecruiterDiscoveryService()
+

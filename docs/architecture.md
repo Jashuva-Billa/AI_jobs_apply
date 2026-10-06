@@ -71,6 +71,7 @@ Streamlit ──► FastAPI ──► LangGraph ──► OpenAI Responses API (
 | `prepare_application` | Write | Prepares factual tailored resume, cover letter, and drafts. |
 | `prepare_applications_batch` | Batch/Write | Concurrently prepares application packages under bounded concurrency (max 10). |
 | `get_pending_approvals` | Read | Fetches pending application packages awaiting human review. |
+| `get_application_status` | Read | Retrieves aggregated persisted status, approval state, outreach delivery details, and audit history. |
 | `approve_applications` | Action/Write | Approves applications in SQL upon explicit user command. |
 | `reject_applications` | Action/Write | Rejects application records in SQL. |
 | `send_approved_email` | Action/Write | Dispatches outreach email with idempotency key `candidate_id:job_id:EMAIL_OUTREACH`. |

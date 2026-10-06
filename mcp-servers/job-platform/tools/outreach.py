@@ -44,16 +44,39 @@ async def send_approved_email(application_id: str) -> Dict[str, Any]:
                 "application_url": job.application_url if job else None
             }
 
+        from app.services.email_resolution_service import validate_recipient_before_send, RecipientClassification
+
+        if not job:
+            return {"error": "Associated job record not found", "application_id": application_id}
+
+        job_dict = {c.name: getattr(job, c.name) for c in job.__table__.columns}
+        recipient_email = email_out.recipient_email.strip()
+
+        is_allowed, safety_status, block_reason = validate_recipient_before_send(
+            job_dict, recipient_email, email_out.email_status, email_out.email_source, app.candidate_id, application_id
+        )
+
+        if not is_allowed:
+            email_out.email_status = RecipientClassification.BLOCKED_INVALID_RECIPIENT
+            email_out.status = "FAILED"
+            await session.commit()
+            return {
+                "status": "BLOCKED_INVALID_RECIPIENT",
+                "error": f"Email sending blocked: {block_reason}.",
+                "application_id": application_id
+            }
+
         idempotency_key = f"{app.candidate_id}:{app.job_id}:EMAIL_OUTREACH"
 
         try:
             email_res = await email_provider.send_email(
-                to_email=email_out.recipient_email,
+                to_email=recipient_email,
                 subject=email_out.subject or f"Application for {job.title if job else 'Position'}",
                 body=email_out.body,
                 idempotency_key=idempotency_key
             )
             email_out.status = "SENT"
+            email_out.email_status = "VERIFIED"
             email_out.sent_at = datetime.datetime.utcnow()
             app.status = ApplicationStatus.RECRUITER_CONTACTED
             await session.commit()

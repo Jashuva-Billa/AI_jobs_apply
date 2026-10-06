@@ -1,5 +1,7 @@
 @echo off
-title Antigravity AI - Job Platform Launcher
+title Antigravity AI - Agentic Job Platform Launcher
+cls
+color 0B
 echo ==============================================================================
 echo           Starting Antigravity AI - Agentic Job Platform Services
 echo ==============================================================================
@@ -15,8 +17,8 @@ start "Streamlit Dashboard (Port 8501)" cmd /k "cd /d %~dp0 && streamlit run str
 
 timeout /t 2 /nobreak >nul
 
-echo [3/4] Starting Job Platform MCP Server on http://localhost:8001...
-start "MCP Server (Port 8001)" cmd /k "cd /d %~dp0 && python mcp-servers/job-platform/server.py"
+echo [3/4] Starting Job Platform MCP Server on http://localhost:8001 (16 Tools)...
+start "Job Platform MCP Server (Port 8001)" cmd /k "cd /d %~dp0 && python mcp-servers/job-platform/server.py"
 
 timeout /t 2 /nobreak >nul
 
@@ -25,12 +27,15 @@ start "Ngrok Tunnel (Port 8001)" cmd /k "cd /d %~dp0 && ngrok http 8001"
 
 echo.
 echo ==============================================================================
-echo  All 4 services launched in separate windows!
+echo  All 4 services successfully launched in separate windows!
 echo.
-echo  • FastAPI Backend:       http://localhost:8000/docs
+echo  • FastAPI Backend API:   http://localhost:8000/docs
 echo  • Streamlit Dashboard:   http://localhost:8501
-echo  • Local MCP Server:      http://localhost:8001/sse
-echo  • ChatGPT MCP URL:       Check the Ngrok window for your https://*.ngrok-free.dev/sse
+echo  • Local MCP Server:      http://localhost:8001/health
+echo  • MCP SSE Transport:     http://localhost:8001/sse
+echo  • ChatGPT MCP URL:       Check the Ngrok window for: https://*.ngrok-free.dev/sse
+echo.
+echo  Registered MCP Tools:   16 Tools (Candidate, Search, Match, HITL, Status, Outreach)
 echo ==============================================================================
 echo.
 pause

@@ -125,6 +125,9 @@ class Job(Base):
     application_url = Column(String(1024), nullable=True)
     source_url = Column(String(1024), nullable=True)
     source_urls = Column(JSON, default=list)
+    recruiter_email = Column(String(255), nullable=True)
+    application_email = Column(String(255), nullable=True)
+    contact_email = Column(String(255), nullable=True)
     posted_date = Column(String(64), nullable=True)
     company_url = Column(String(512), nullable=True)
     verification_status = Column(String(64), default="VERIFIED") # VERIFIED, PARTIALLY_VERIFIED, UNVERIFIED, EXPIRED
@@ -218,6 +221,10 @@ class OutreachMessage(Base):
     body = Column(Text, nullable=False)
     recipient_email = Column(String(255), nullable=True)
     recipient_name = Column(String(255), nullable=True)
+    email_status = Column(String(64), default="NOT_FOUND") # VERIFIED, UNVERIFIED, NOT_FOUND, INVALID, REJECTED, BLOCKED_INVALID_RECIPIENT
+    email_source = Column(String(64), nullable=True) # job_source, job_description, application_page, official_careers_page, verified_recruiter
+    email_confidence = Column(Float, default=0.0)
+    recruiter_status = Column(String(64), default="NOT_FOUND") # VERIFIED, UNVERIFIED, NOT_FOUND
     status = Column(String(64), default="DRAFT") # DRAFT, APPROVED, SENT, FAILED, MANUAL_REQUIRED
     sent_at = Column(DateTime, nullable=True)
     idempotency_key = Column(String(255), unique=True, nullable=True)

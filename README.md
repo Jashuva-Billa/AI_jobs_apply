@@ -144,11 +144,11 @@ You can connect your local system directly to **ChatGPT Web** (ChatGPT Plus, Tea
    - **Server URL:** `https://<your-ngrok-subdomain>.ngrok-free.dev/sse` (e.g., `https://celery-ecosystem-suspense.ngrok-free.dev/sse`)
    - **Authentication:** `None` (Development mode)
 5. Click **Connect & Scan Tools**.
-   ChatGPT will automatically discover and register all **14 business tools**.
+   ChatGPT will automatically discover and register all **16 business tools**.
 
 ---
 
-## 🧰 Available MCP Tools Reference
+## 🧰 Available MCP Tools Reference (16 Total)
 
 | Tool Name | Type | Description |
 | :--- | :--- | :--- |
@@ -164,8 +164,8 @@ You can connect your local system directly to **ChatGPT Web** (ChatGPT Plus, Tea
 | `prepare_applications_batch` | `WRITE/BATCH` | Prepares application packages for all qualified jobs under bounded concurrency. |
 | `get_pending_approvals` | `READ-ONLY` | Retrieves all pending applications awaiting human authorization. |
 | `get_application_status` | `READ-ONLY` | Retrieves lifecycle status, approval state, and complete audit history for any application ID. |
-| `approve_applications` | `WRITE/ACTION` | **Explicit Human Gate:** Approves applications, triggers authorized email outreach. |
-| `reject_applications` | `WRITE` | Rejects application approval records. |
+| `approve_applications` | `WRITE/ACTION` | **Explicit Human Gate:** Approves applications by exact UUID, triggers authorized email outreach. |
+| `reject_applications` | `WRITE` | Rejects application approval records by exact UUID. |
 | `send_approved_email` | `WRITE/ACTION` | Dispatches outreach email for explicitly approved applications (idempotency-guarded). |
 | `prepare_linkedin_outreach` | `READ-ONLY` | Generates compliant LinkedIn outreach copy and deep-links to recruiter profiles. |
 
@@ -182,8 +182,9 @@ Once connected, you can converse naturally with ChatGPT:
 2. Searches live openings via `search_jobs`.
 3. Runs deterministic 7-factor scoring via `match_jobs`.
 4. Prepares tailored resume summaries, cover letters, and outreach drafts via `prepare_applications_batch` (status: `PENDING`).
-5. Fetches pending applications via `get_pending_approvals` and formats a review table.
-6. Awaits your approval (e.g., *"Approve application IDs 1 and 3"*) before calling `approve_applications`.
+5. Fetches pending applications via `get_pending_approvals` and formats a review table with exact UUIDs.
+6. Awaits your approval (e.g., *"Approve application `<APPROVAL_UUID>`"*) before calling `approve_applications`.
+7. Inspects status at any point via `get_application_status`.
 
 ---
 

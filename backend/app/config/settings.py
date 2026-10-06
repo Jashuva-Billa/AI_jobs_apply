@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     DEBUG: bool = True
     DEMO_MODE: bool = False
+    DRY_RUN: bool = False
     
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///./jobs_platform.db"

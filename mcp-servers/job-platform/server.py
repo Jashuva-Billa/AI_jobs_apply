@@ -271,7 +271,7 @@ async def health_check(request):
         "mcp_version": "2.x",
         "transports": ["/sse", "/mcp"],
         "auth": auth_meta,
-        "registered_tools_count": 14,
+        "registered_tools_count": 16,
         "candidate": "Jashuva Billa",
         "experience": "2.9 years",
         "role": "AI Engineer / Generative AI / Agentic AI / RAG"

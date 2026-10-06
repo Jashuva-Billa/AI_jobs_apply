@@ -478,7 +478,7 @@ if menu == "⚡ MCP Server & ChatGPT Gateway":
     with c_m1:
         st.metric("MCP Server Status", "🟢 ONLINE" if mcp_healthy else "🔴 OFFLINE", f"Port {mcp_port}")
     with c_m2:
-        st.metric("Registered Tools", mcp_data.get("registered_tools_count", 15), "Deterministic")
+        st.metric("Registered Tools", mcp_data.get("registered_tools_count", 16), "Deterministic")
     with c_m3:
         st.metric("Transports", "/sse, /mcp", "Streamable HTTP")
     with c_m4:

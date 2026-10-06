@@ -61,7 +61,7 @@ This guide walks you through connecting your local **AI Job Platform MCP Server*
      "service": "job-platform-mcp",
      "mcp_version": "2.x",
      "transports": ["/sse", "/mcp"],
-     "registered_tools_count": 15
+     "registered_tools_count": 16
    }
    ```
 
@@ -76,10 +76,10 @@ ChatGPT Web requires a publicly accessible HTTPS endpoint. Use `ngrok` or Cloudf
 ngrok http 8001
 ```
 Ngrok will generate a secure public forwarding URL, for example:
-`https://abcd-1234-5678.ngrok-free.app`
+`https://abcd-1234-5678.ngrok-free.dev`
 
 Your MCP SSE endpoint will be:
-`https://abcd-1234-5678.ngrok-free.app/sse`
+`https://abcd-1234-5678.ngrok-free.dev/sse`
 
 ### Option B: Using Cloudflare Tunnel
 ```bash
@@ -95,17 +95,26 @@ cloudflared tunnel --url http://localhost:8001
 3. Select **Add Custom MCP Server / Connector**.
 4. Enter configuration details:
    - **Server Name:** `job-platform-mcp`
-   - **MCP Server URL:** `https://your-tunnel-domain.ngrok-free.app/sse` (or `/mcp`)
+   - **MCP Server URL:** `https://your-tunnel-domain.ngrok-free.dev/sse` (or `/mcp`)
    - **Authentication:** None (in `development` mode) or Bearer Token (if `MCP_AUTH_MODE=protected`)
 5. Click **Scan & Discover Tools**.
-   ChatGPT will automatically register all 15 business tools:
-   - `get_candidate_profile`, `update_candidate_profile`, `get_candidate_resume`
-   - `search_jobs`, `get_search_run`, `get_search_results`
-   - `match_jobs` (Deterministic 7-factor scoring engine)
-   - `find_recruiter`
-   - `prepare_application`, `prepare_applications_batch`
-   - `get_pending_approvals`, `approve_applications`, `reject_applications`
-   - `send_approved_email`, `prepare_linkedin_outreach`
+   ChatGPT will automatically register all 16 business tools:
+   1. `get_candidate_profile` (Read-only candidate overview)
+   2. `update_candidate_profile` (Update preferences and skills)
+   3. `get_candidate_resume` (Read-only factual resume text)
+   4. `search_jobs` (Live multi-source job search across RemoteOK, Arbeitnow, Career portals)
+   5. `get_search_run` (Durable search run inspection)
+   6. `get_search_results` (Paginated search results & match evaluations)
+   7. `match_jobs` (Deterministic 7-factor scoring engine)
+   8. `find_recruiter` (Evidence-backed public recruiter discovery)
+   9. `prepare_application` (Single application preparation into PENDING_APPROVAL)
+   10. `prepare_applications_batch` (Bounded concurrency batch preparation into PENDING_APPROVAL)
+   11. `get_pending_approvals` (Read-only review table for human authorization)
+   12. `get_application_status` (Read-only aggregate status, outreach delivery, and audit history)
+   13. `approve_applications` (Human approval gate by exact UUIDs)
+   14. `reject_applications` (Application rejection by exact UUIDs)
+   15. `send_approved_email` (Outreach email dispatch with idempotency key)
+   16. `prepare_linkedin_outreach` (Compliant manual deep links and outreach copy)
 
 ---
 

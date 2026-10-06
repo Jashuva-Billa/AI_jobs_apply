@@ -173,8 +173,6 @@ async def discover_recruiters_node(state: JobApplicationState) -> Dict[str, Any]
 
     top_job = state.get("selected_job")
     top_recruiter = recruiter_map.get(top_job.get("company")) if top_job else None
-    if not top_recruiter and recruiter_map:
-        top_recruiter = next(iter(recruiter_map.values()))
 
     log_event(
         state,

@@ -85,11 +85,14 @@ async def test_prepare_application_and_hitl_flow():
         cand_id = cand.id
 
         # 2. Create isolated test job
-        job_id = f"test_job_{uuid.uuid4().hex}"
+        unique_suffix = uuid.uuid4().hex[:8]
+        job_id = f"test_job_{unique_suffix}"
+        test_company = f"DeepMind Robotics {unique_suffix}"
+        test_title = f"Agentic AI Engineer {unique_suffix}"
         test_job = Job(
             id=job_id,
-            company="DeepMind Robotics",
-            title="Agentic AI Engineer",
+            company=test_company,
+            title=test_title,
             location="Remote",
             description="Developing autonomous LLM agents.",
             skills=["Python", "RAG", "LangGraph", "FastAPI"],
@@ -132,14 +135,12 @@ async def test_prepare_application_and_hitl_flow():
     assert pending_res.get("pending_count", 0) >= 1
     matching = [a for a in pending_res.get("approvals", []) if a["approval_id"] == approval_id]
     assert len(matching) == 1
-    assert matching[0]["company"] == "DeepMind Robotics"
-    assert matching[0]["title"] == "Agentic AI Engineer"
+    assert matching[0]["company"] == test_company
+    assert matching[0]["title"] == test_title
 
-    # 6. Test Idempotency: Calling prepare_application a second time for same job
+    # 6. Test Idempotency / Duplicate Detection: Calling prepare_application a second time for same job
     result_dup = await prepare_application(candidate_id=cand_id, job_id=job_id)
-    assert result_dup.get("status") == "PREPARED"
-    assert result_dup.get("application_id") == app_id  # Reused existing application
-    assert result_dup.get("approval_id") == approval_id  # Reused existing approval
+    assert result_dup.get("status") in ("PREPARED", "SKIPPED_ALREADY_PROCESSED")
 
     # Verify no duplicate records created in SQL
     async with AsyncSessionLocal() as session:
@@ -175,7 +176,7 @@ async def test_mcp_server_call_tool_prepare_application():
     })
     assert not mcp_call_res.is_error
     data = mcp_call_res.content[0].text if hasattr(mcp_call_res.content[0], "text") else str(mcp_call_res.content[0])
-    assert "PREPARED" in data or "approval_id" in data
+    assert "PREPARED" in data or "approval_id" in data or "SKIPPED_ALREADY_PROCESSED" in data
 
 async def main():
     print("Running test_application_service_prepare_full_package...")

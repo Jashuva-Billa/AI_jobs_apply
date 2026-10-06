@@ -51,8 +51,7 @@ async def find_recruiter(
                 company_name=target_company,
                 public_email=recruiter_base.public_email,
                 linkedin_url=recruiter_base.linkedin_url,
-                source_evidence=recruiter_base.source_evidence,
-                confidence_score=recruiter_base.confidence_score
+                source_evidence=recruiter_base.source_evidence
             )
             session.add(rec_entity)
             await session.commit()
