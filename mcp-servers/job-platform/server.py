@@ -8,6 +8,7 @@ backend_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 if backend_path not in sys.path:
     sys.path.insert(0, backend_path)
 
+from urllib.parse import urlparse
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route, Mount
@@ -16,8 +17,10 @@ from starlette.middleware.cors import CORSMiddleware
 import uvicorn
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 from auth.handler import mcp_auth
 from instructions.system_prompt import JOB_PLATFORM_AGENT_INSTRUCTIONS
+from app.config.settings import settings
 
 # Import tool implementations
 from tools.candidate import get_candidate_profile as _get_candidate_profile
@@ -30,6 +33,7 @@ from tools.matching import match_jobs as _match_jobs
 from tools.recruiters import find_recruiter as _find_recruiter
 from tools.applications import prepare_application as _prepare_application
 from tools.applications import prepare_applications_batch as _prepare_applications_batch
+from tools.applications import get_application_status as _get_application_status
 from tools.approvals import get_pending_approvals as _get_pending_approvals
 from tools.approvals import approve_applications as _approve_applications
 from tools.approvals import reject_applications as _reject_applications
@@ -245,6 +249,15 @@ async def prepare_linkedin_outreach(application_id: str) -> Dict[str, Any]:
     """
     return await _prepare_linkedin_outreach(application_id=application_id)
 
+@mcp.tool()
+async def get_application_status(application_id: str) -> Dict[str, Any]:
+    """
+    [READ-ONLY] Retrieve the current persisted status, approval state, outreach delivery details,
+    and audit history for a specific application ID across all lifecycle stages (PENDING, APPROVED, REJECTED, SUBMITTED, FAILED).
+    Guaranteed read-only: never mutates state, sends emails, or performs outreach.
+    """
+    return await _get_application_status(application_id=application_id)
+
 # ---------------------------------------------------------------------------
 # HTTP / SSE / ASGI SERVER MOUNTING
 # ---------------------------------------------------------------------------
@@ -258,7 +271,7 @@ async def health_check(request):
         "mcp_version": "2.x",
         "transports": ["/sse", "/mcp"],
         "auth": auth_meta,
-        "registered_tools_count": 13,
+        "registered_tools_count": 14,
         "candidate": "Jashuva Billa",
         "experience": "2.9 years",
         "role": "AI Engineer / Generative AI / Agentic AI / RAG"
@@ -270,12 +283,97 @@ async def get_instructions_endpoint(request):
         "instructions": JOB_PLATFORM_AGENT_INSTRUCTIONS
     })
 
+def get_transport_security_settings() -> TransportSecuritySettings:
+    """
+    Build TransportSecuritySettings allowing localhost, ngrok, and any configured custom hosts/origins.
+    Protects against DNS rebinding while allowing public tunnel connectivity (e.g. ngrok, ChatGPT Web).
+    """
+    allowed_hosts = {
+        "localhost",
+        "localhost:*",
+        "127.0.0.1",
+        "127.0.0.1:*",
+        "0.0.0.0",
+        "0.0.0.0:*",
+        "[::1]",
+        "[::1]:*",
+        "celery-ecosystem-suspense.ngrok-free.dev",
+        "celery-ecosystem-suspense.ngrok-free.dev:*",
+    }
+
+    # Parse ALLOWED_HOSTS / MCP_ALLOWED_HOSTS from settings and environment
+    env_hosts = os.getenv("ALLOWED_HOSTS", "") or os.getenv("MCP_ALLOWED_HOSTS", "") or getattr(settings, "ALLOWED_HOSTS", "")
+    if env_hosts:
+        for host_entry in str(env_hosts).split(","):
+            h = host_entry.strip()
+            if h:
+                if h.startswith("http://") or h.startswith("https://"):
+                    parsed = urlparse(h)
+                    if parsed.netloc:
+                        h = parsed.netloc
+                allowed_hosts.add(h)
+                if not h.endswith(":*"):
+                    allowed_hosts.add(f"{h}:*")
+
+    # Parse MCP_PUBLIC_URL if present
+    public_url = os.getenv("MCP_PUBLIC_URL", "") or getattr(settings, "MCP_PUBLIC_URL", "") or ""
+    if public_url:
+        parsed = urlparse(str(public_url).strip())
+        if parsed.netloc:
+            h = parsed.netloc
+            allowed_hosts.add(h)
+            if not h.endswith(":*"):
+                allowed_hosts.add(f"{h}:*")
+
+    # Base allowed origins (ChatGPT Web, local origins, ngrok)
+    allowed_origins = {
+        "http://localhost:*",
+        "http://127.0.0.1:*",
+        "http://[::1]:*",
+        "https://chatgpt.com",
+        "https://chatgpt.com:*",
+        "https://chat.openai.com",
+        "https://chat.openai.com:*",
+        "https://platform.openai.com",
+        "https://platform.openai.com:*",
+        "https://celery-ecosystem-suspense.ngrok-free.dev",
+        "https://celery-ecosystem-suspense.ngrok-free.dev:*",
+        "http://celery-ecosystem-suspense.ngrok-free.dev",
+        "http://celery-ecosystem-suspense.ngrok-free.dev:*",
+    }
+
+    # Add HTTP/HTTPS origins for all allowed hosts
+    for h in list(allowed_hosts):
+        clean_h = h[:-2] if h.endswith(":*") else h
+        allowed_origins.add(f"http://{clean_h}")
+        allowed_origins.add(f"https://{clean_h}")
+        allowed_origins.add(f"http://{clean_h}:*")
+        allowed_origins.add(f"https://{clean_h}:*")
+
+    # Parse ALLOWED_ORIGINS / MCP_ALLOWED_ORIGINS from env/settings
+    env_origins = os.getenv("ALLOWED_ORIGINS", "") or os.getenv("MCP_ALLOWED_ORIGINS", "") or getattr(settings, "MCP_ALLOWED_ORIGINS", "") or ""
+    if env_origins:
+        for origin_entry in str(env_origins).split(","):
+            o = origin_entry.strip()
+            if o:
+                allowed_origins.add(o)
+                if not o.endswith(":*"):
+                    allowed_origins.add(f"{o}:*")
+
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=list(allowed_hosts),
+        allowed_origins=list(allowed_origins),
+    )
+
+transport_security = get_transport_security_settings()
+
 # Create Starlette app mounting MCP SSE and Streamable HTTP endpoints
 routes = [
     Route("/health", health_check, methods=["GET"]),
     Route("/info", health_check, methods=["GET"]),
     Route("/instructions", get_instructions_endpoint, methods=["GET"]),
-    Mount("/", app=mcp.sse_app())
+    Mount("/", app=mcp.sse_app(transport_security=transport_security))
 ]
 
 middleware = [

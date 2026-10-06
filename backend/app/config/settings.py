@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     
     # Security & Encryption
     SECRET_KEY: str = "agentic-secret-key-for-local-development-change-in-production-123456"
+    ALLOWED_HOSTS: str = "localhost,127.0.0.1,celery-ecosystem-suspense.ngrok-free.dev"
+    MCP_PUBLIC_URL: Optional[str] = None
+    MCP_ALLOWED_ORIGINS: Optional[str] = None
     
     # OAuth Credentials
     GOOGLE_CLIENT_ID: Optional[str] = None

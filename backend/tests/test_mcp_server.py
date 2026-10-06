@@ -36,7 +36,8 @@ async def test_mcp_tool_discovery():
         "approve_applications",
         "reject_applications",
         "send_approved_email",
-        "prepare_linkedin_outreach"
+        "prepare_linkedin_outreach",
+        "get_application_status"
     ]
     for exp in expected_tools:
         assert exp in tool_names, f"Missing MCP tool: {exp}"

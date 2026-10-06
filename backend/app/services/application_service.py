@@ -1,9 +1,14 @@
+import uuid
+from datetime import datetime
 import logging
 from typing import Dict, Any, List, Optional
 from app.schemas.schemas import (
     CandidateProfileBase,
     ApplicationQuestionSchema,
-    MatchBreakdown
+    MatchBreakdown,
+    ApplicationPackage,
+    JobResponse,
+    RecruiterResponse
 )
 from app.integrations.llm.provider import llm_provider
 
@@ -154,5 +159,99 @@ class ApplicationPackageService:
             ))
 
         return results
+
+    async def prepare_full_package(
+        self,
+        candidate: CandidateProfileBase,
+        job: Dict[str, Any],
+        recruiter: Optional[Any] = None,
+        match: Optional[MatchBreakdown] = None
+    ) -> ApplicationPackage:
+        """
+        Prepares a complete factual application package:
+        - Evaluates match if not provided
+        - Tailors resume (summary, full text, and highlighted skills)
+        - Generates tailored cover letter
+        - Generates 3-tier classified application answers
+        - Structures package with recruiter info and metadata
+        """
+        if match is None:
+            from app.services.matching_service import matching_service
+            if isinstance(job.get("match"), dict):
+                match = MatchBreakdown(**job["match"])
+            elif isinstance(job.get("match"), MatchBreakdown):
+                match = job["match"]
+            else:
+                match = matching_service.evaluate_match(candidate, job)
+
+        tailored_res = await self.tailor_resume(candidate, job, match)
+        cover_letter = await self.generate_cover_letter(candidate, job, match)
+        questions = self.prepare_application_questions(candidate, job)
+
+        rec_dto = None
+        if recruiter:
+            if isinstance(recruiter, dict):
+                rec_dto = RecruiterResponse(
+                    id=recruiter.get("id") or str(uuid.uuid4()),
+                    name=recruiter.get("name", "Hiring Team"),
+                    title=recruiter.get("title", "Technical Recruiter"),
+                    company_name=recruiter.get("company_name", job.get("company", "")),
+                    public_email=recruiter.get("public_email"),
+                    linkedin_url=recruiter.get("linkedin_url"),
+                    source_evidence=recruiter.get("source_evidence"),
+                    created_at=recruiter.get("created_at") or datetime.utcnow()
+                )
+            elif hasattr(recruiter, "name"):
+                rec_dto = RecruiterResponse(
+                    id=getattr(recruiter, "id", "") or str(uuid.uuid4()),
+                    name=getattr(recruiter, "name", "Hiring Team"),
+                    title=getattr(recruiter, "title", "Technical Recruiter"),
+                    company_name=getattr(recruiter, "company_name", job.get("company", "")),
+                    public_email=getattr(recruiter, "public_email", None),
+                    linkedin_url=getattr(recruiter, "linkedin_url", None),
+                    source_evidence=getattr(recruiter, "source_evidence", None),
+                    created_at=getattr(recruiter, "created_at", None) or datetime.utcnow()
+                )
+
+        job_dto = None
+        if isinstance(job, dict):
+            try:
+                job_dto = JobResponse(
+                    id=job.get("id", "job_temp"),
+                    canonical_job_id=job.get("canonical_job_id"),
+                    company=job.get("company", "Target Company"),
+                    title=job.get("title", "AI Engineer"),
+                    location=job.get("location", "Remote"),
+                    remote=bool(job.get("remote", True)),
+                    employment_type=job.get("employment_type", "Full-time"),
+                    experience_required=job.get("experience_required"),
+                    salary=job.get("salary"),
+                    description=job.get("description", ""),
+                    requirements=job.get("requirements", []),
+                    skills=job.get("skills", []),
+                    application_url=job.get("application_url"),
+                    source_url=job.get("source_url"),
+                    source_urls=job.get("source_urls", []),
+                    posted_date=job.get("posted_date"),
+                    company_url=job.get("company_url"),
+                    verification_status=job.get("verification_status", "VERIFIED"),
+                    evidence=job.get("evidence", []),
+                    research_provider=job.get("research_provider", "openai_web_search"),
+                    created_at=job.get("created_at") or datetime.utcnow()
+                )
+            except Exception as e:
+                logger.warning(f"Could not build JobResponse: {e}")
+
+        return ApplicationPackage(
+            application_id=job.get("application_id"),
+            job=job_dto,
+            match=match,
+            recruiter=rec_dto,
+            tailored_resume_summary=tailored_res.get("tailored_summary"),
+            tailored_resume_text=tailored_res.get("tailored_text"),
+            highlighted_skills=tailored_res.get("highlighted_skills", []),
+            cover_letter=cover_letter,
+            questions=questions
+        )
 
 application_service = ApplicationPackageService()

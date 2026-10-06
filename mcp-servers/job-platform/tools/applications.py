@@ -81,9 +81,10 @@ async def _prepare_single_application_task(
                 email_out = await outreach_service.generate_recruiter_email(cand_schema, job_dict, rec_obj)
                 li_out = await outreach_service.generate_linkedin_outreach(cand_schema, job_dict, rec_obj)
 
-                # Save Outreach
+                # Save Outreach Messages
                 o_res = await session.execute(select(OutreachMessage).filter_by(application_id=app_id, channel="EMAIL"))
-                if not o_res.scalars().first():
+                existing_email = o_res.scalars().first()
+                if not existing_email:
                     session.add(OutreachMessage(
                         id=str(uuid.uuid4()),
                         application_id=app_id,
@@ -94,9 +95,13 @@ async def _prepare_single_application_task(
                         recipient_name=rec_obj.name if rec_obj else "Hiring Team",
                         status="DRAFT"
                     ))
+                else:
+                    existing_email.subject = email_out.subject
+                    existing_email.body = email_out.body
 
                 o_li_res = await session.execute(select(OutreachMessage).filter_by(application_id=app_id, channel="LINKEDIN"))
-                if not o_li_res.scalars().first():
+                existing_li = o_li_res.scalars().first()
+                if not existing_li:
                     session.add(OutreachMessage(
                         id=str(uuid.uuid4()),
                         application_id=app_id,
@@ -106,10 +111,52 @@ async def _prepare_single_application_task(
                         recipient_name=rec_obj.name if rec_obj else "Hiring Team",
                         status="DRAFT"
                     ))
+                else:
+                    existing_li.subject = li_out.subject
+                    existing_li.body = li_out.body
 
-                # 6. Create ApprovalRequest record in SQL
+                # 5. Save Application Questions
+                if app_pkg_dto.questions:
+                    for q in app_pkg_dto.questions:
+                        q_res = await session.execute(
+                            select(ApplicationQuestion).filter_by(application_id=app_id, question=q.question)
+                        )
+                        if not q_res.scalars().first():
+                            session.add(ApplicationQuestion(
+                                id=str(uuid.uuid4()),
+                                application_id=app_id,
+                                question=q.question,
+                                answer=q.answer,
+                                is_sensitive=q.is_sensitive,
+                                needs_user_input=q.needs_user_input,
+                                status=q.status
+                            ))
+
+                # 6. Create or update ApprovalRequest record in SQL (PENDING status)
                 req_res = await session.execute(select(ApprovalRequest).filter_by(application_id=app_id))
                 approval_req = req_res.scalars().first()
+                package_data = {
+                    "company": job_entity.company,
+                    "title": job_entity.title,
+                    "location": job_entity.location or "Remote",
+                    "tailored_resume_summary": app_pkg_dto.tailored_resume_summary,
+                    "tailored_resume_text": app_pkg_dto.tailored_resume_text,
+                    "highlighted_skills": app_pkg_dto.highlighted_skills,
+                    "cover_letter": app_pkg_dto.cover_letter,
+                    "questions": [q.model_dump() if hasattr(q, "model_dump") else dict(q) for q in (app_pkg_dto.questions or [])],
+                    "match_score": app_pkg_dto.match.overall_score if app_pkg_dto.match else None,
+                    "match_recommendation": app_pkg_dto.match.recommendation if app_pkg_dto.match else None,
+                    "email_outreach": {
+                        "subject": email_out.subject,
+                        "body": email_out.body,
+                        "recipient_email": email_out.recipient_email or (rec_obj.public_email if rec_obj else None)
+                    },
+                    "linkedin_outreach": {
+                        "subject": li_out.subject,
+                        "body": li_out.body
+                    }
+                }
+
                 if not approval_req:
                     approval_id = str(uuid.uuid4())
                     approval_req = ApprovalRequest(
@@ -117,40 +164,42 @@ async def _prepare_single_application_task(
                         run_id=run_id,
                         application_id=app_id,
                         status=ApprovalStatus.PENDING,
-                        package_data={
-                            "company": job_entity.company,
-                            "title": job_entity.title,
-                            "tailored_resume_summary": app_pkg_dto.tailored_resume_summary,
-                            "cover_letter": app_pkg_dto.cover_letter,
-                            "email_outreach": {
-                                "subject": email_out.subject,
-                                "body": email_out.body,
-                                "recipient_email": email_out.recipient_email or (rec_obj.public_email if rec_obj else None)
-                            },
-                            "linkedin_outreach": {
-                                "body": li_out.body
-                            }
-                        }
+                        action_type="SUBMIT_AND_OUTREACH",
+                        package_data=package_data
                     )
                     session.add(approval_req)
                 else:
                     approval_id = approval_req.id
+                    approval_req.package_data = package_data
+                    approval_req.status = ApprovalStatus.PENDING
 
                 await session.commit()
 
                 return {
                     "status": "PREPARED",
+                    "approval_status": "PENDING_APPROVAL",
                     "job_id": job_entity.id,
                     "company": job_entity.company,
                     "title": job_entity.title,
                     "application_id": app_id,
                     "approval_id": approval_id,
+                    "tailored_resume_summary": app_pkg_dto.tailored_resume_summary,
+                    "cover_letter": app_pkg_dto.cover_letter,
+                    "highlighted_skills": app_pkg_dto.highlighted_skills,
                     "email_recipient": email_out.recipient_email or (rec_obj.public_email if rec_obj else None),
-                    "recruiter_name": rec_obj.name if rec_obj else "Talent Team"
+                    "recruiter_name": rec_obj.name if rec_obj else "Talent Team",
+                    "message": f"Application package successfully prepared for {job_entity.title} at {job_entity.company}. Approval record {approval_id} is in PENDING status awaiting user review."
                 }
             except Exception as e:
-                logger.error(f"Failed preparing application for {job_entity.company}: {e}")
-                return {"status": "FAILED", "job_id": job_entity.id, "error": str(e)}
+                logger.error(f"Failed preparing application for {job_entity.company}: {e}", exc_info=True)
+                return {
+                    "status": "FAILED",
+                    "error_code": "APPLICATION_PREPARATION_ERROR",
+                    "message": f"Failed to prepare application package for {job_entity.company}: {str(e)}",
+                    "job_id": job_entity.id,
+                    "failed_stage": "package_generation",
+                    "error": str(e)
+                }
 
 async def prepare_application(
     candidate_id: Optional[str] = None,
@@ -169,11 +218,22 @@ async def prepare_application(
             cand = res.scalars().first()
 
         if not cand:
-            return {"error": "Candidate profile not found"}
+            return {
+                "status": "FAILED",
+                "error_code": "CANDIDATE_NOT_FOUND",
+                "message": "Candidate profile not found in database",
+                "failed_stage": "candidate_lookup"
+            }
 
         job = await session.get(Job, job_id)
         if not job:
-            return {"error": "Job not found", "job_id": job_id}
+            return {
+                "status": "FAILED",
+                "error_code": "JOB_NOT_FOUND",
+                "message": f"Job with ID '{job_id}' not found in database",
+                "job_id": job_id,
+                "failed_stage": "job_lookup"
+            }
 
         cand_dict = {c.name: getattr(cand, c.name) for c in cand.__table__.columns}
         cand_schema = CandidateProfileResponse.model_validate(cand_dict)
@@ -234,4 +294,208 @@ async def prepare_applications_batch(
             "failed": failed_count,
             "approvals_pending": prepared_count,
             "results": results
+        }
+
+async def get_application_status(application_id: str) -> Dict[str, Any]:
+    """
+    [READ-ONLY] Retrieve the current persisted status, approval state, outreach delivery details,
+    and audit history for a specific application ID across all lifecycle stages.
+    Guaranteed read-only: never mutates state, sends emails, or performs outreach.
+    """
+    if not application_id:
+        return {
+            "status": "NOT_FOUND",
+            "error_code": "INVALID_APPLICATION_ID",
+            "message": "application_id parameter is required.",
+            "application_id": application_id
+        }
+
+    async with AsyncSessionLocal() as session:
+        # 1. Fetch Application entity
+        app = await session.get(Application, application_id)
+        if not app:
+            return {
+                "status": "NOT_FOUND",
+                "error_code": "APPLICATION_NOT_FOUND",
+                "message": f"Application with ID '{application_id}' not found in database.",
+                "application_id": application_id
+            }
+
+        # 2. Fetch Associated Job
+        job = await session.get(Job, app.job_id) if app.job_id else None
+
+        # 3. Fetch Associated ApprovalRequest
+        appr_res = await session.execute(
+            select(ApprovalRequest).filter_by(application_id=app.id).order_by(ApprovalRequest.created_at.desc())
+        )
+        approval_req = appr_res.scalars().first()
+
+        # 4. Fetch Outreach Messages (Email & LinkedIn)
+        out_res = await session.execute(
+            select(OutreachMessage).filter_by(application_id=app.id).order_by(OutreachMessage.created_at.asc())
+        )
+        outreaches = out_res.scalars().all()
+        email_out = next((o for o in outreaches if o.channel == "EMAIL"), None)
+        li_out = next((o for o in outreaches if o.channel == "LINKEDIN"), None)
+
+        # 5. Fetch Recruiter if present
+        recruiter = None
+        if email_out and email_out.recruiter_id:
+            recruiter = await session.get(Recruiter, email_out.recruiter_id)
+        elif job and job.company:
+            rec_res = await session.execute(select(Recruiter).filter_by(company_name=job.company).limit(1))
+            recruiter = rec_res.scalars().first()
+
+        # Build Email Details
+        if email_out:
+            email_info = {
+                "status": email_out.status,
+                "recipient": email_out.recipient_email,
+                "recipient_name": email_out.recipient_name,
+                "subject": email_out.subject,
+                "sent_at": email_out.sent_at.isoformat() if email_out.sent_at else None,
+                "created_at": email_out.created_at.isoformat() if email_out.created_at else None
+            }
+        else:
+            email_info = {
+                "status": "NOT_STARTED",
+                "recipient": None,
+                "recipient_name": None,
+                "subject": None,
+                "sent_at": None,
+                "created_at": None
+            }
+
+        # Build LinkedIn Details
+        if li_out:
+            li_status = li_out.status
+            is_sent = li_status in ("SENT", "PREPARED_AND_SENT")
+            is_prepared = bool(li_out.body)
+            manual_req = li_status == "MANUAL_REQUIRED" or (is_prepared and not is_sent)
+            li_info = {
+                "status": li_status,
+                "prepared": is_prepared,
+                "sent": is_sent,
+                "manual_action_required": manual_req,
+                "recipient_name": li_out.recipient_name or (recruiter.name if recruiter else None),
+                "linkedin_url": recruiter.linkedin_url if recruiter else None,
+                "sent_at": li_out.sent_at.isoformat() if li_out.sent_at else None,
+                "created_at": li_out.created_at.isoformat() if li_out.created_at else None
+            }
+        else:
+            li_info = {
+                "status": "NOT_STARTED",
+                "prepared": False,
+                "sent": False,
+                "manual_action_required": False,
+                "recipient_name": None,
+                "linkedin_url": recruiter.linkedin_url if recruiter else None,
+                "sent_at": None,
+                "created_at": None
+            }
+
+        # Build Actions Audit History
+        actions = []
+        if app.created_at:
+            actions.append({
+                "action": "APPLICATION_INITIALIZED",
+                "status": "SUCCESS",
+                "timestamp": app.created_at.isoformat()
+            })
+
+        if approval_req:
+            if approval_req.created_at:
+                actions.append({
+                    "action": "PACKAGE_PREPARED_PENDING_APPROVAL",
+                    "status": "SUCCESS",
+                    "timestamp": approval_req.created_at.isoformat()
+                })
+            if approval_req.status == ApprovalStatus.APPROVED and approval_req.approved_at:
+                actions.append({
+                    "action": "APPLICATION_APPROVED",
+                    "status": "SUCCESS",
+                    "timestamp": approval_req.approved_at.isoformat()
+                })
+            elif approval_req.status == ApprovalStatus.REJECTED:
+                actions.append({
+                    "action": "APPLICATION_REJECTED",
+                    "status": "SUCCESS",
+                    "timestamp": (approval_req.approved_at or approval_req.created_at).isoformat() if (approval_req.approved_at or approval_req.created_at) else None
+                })
+
+        if email_out:
+            if email_out.status == "SENT":
+                actions.append({
+                    "action": "EMAIL_SENT",
+                    "status": "SUCCESS",
+                    "recipient": email_out.recipient_email,
+                    "timestamp": email_out.sent_at.isoformat() if email_out.sent_at else None
+                })
+            elif email_out.status == "FAILED":
+                actions.append({
+                    "action": "EMAIL_DELIVERY_FAILED",
+                    "status": "FAILED",
+                    "timestamp": email_out.created_at.isoformat() if email_out.created_at else None
+                })
+            elif email_out.status == "DRAFT":
+                actions.append({
+                    "action": "EMAIL_DRAFT_CREATED",
+                    "status": "SUCCESS",
+                    "timestamp": email_out.created_at.isoformat() if email_out.created_at else None
+                })
+
+        if li_out:
+            if li_out.status in ("SENT", "PREPARED_AND_SENT"):
+                actions.append({
+                    "action": "LINKEDIN_OUTREACH_SENT",
+                    "status": "SUCCESS",
+                    "timestamp": li_out.sent_at.isoformat() if li_out.sent_at else None
+                })
+            elif li_out.status == "MANUAL_REQUIRED":
+                actions.append({
+                    "action": "LINKEDIN_MANUAL_REQUIRED",
+                    "status": "PENDING",
+                    "timestamp": li_out.created_at.isoformat() if li_out.created_at else None
+                })
+            elif li_out.body:
+                actions.append({
+                    "action": "LINKEDIN_OUTREACH_PREPARED",
+                    "status": "SUCCESS",
+                    "timestamp": li_out.created_at.isoformat() if li_out.created_at else None
+                })
+
+        if app.applied_at:
+            actions.append({
+                "action": "APPLICATION_SUBMITTED",
+                "status": "SUCCESS",
+                "timestamp": app.applied_at.isoformat()
+            })
+
+        latest_action = actions[-1] if actions else {
+            "action": f"STATUS_{app.status}",
+            "timestamp": app.updated_at.isoformat() if app.updated_at else None
+        }
+
+        app_status_val = app.status.value if hasattr(app.status, "value") else str(app.status)
+        approval_status_val = approval_req.status.value if (approval_req and hasattr(approval_req.status, "value")) else (str(approval_req.status) if approval_req else "NONE")
+
+        return {
+            "status": "SUCCESS",
+            "application_id": app.id,
+            "approval_id": approval_req.id if approval_req else None,
+            "job": {
+                "job_id": job.id if job else app.job_id,
+                "title": job.title if job else "Unknown Role",
+                "company": job.company if job else "Unknown Company",
+                "location": job.location if job else "Remote",
+                "application_url": job.application_url if job else None
+            },
+            "application_status": app_status_val,
+            "approval_status": approval_status_val,
+            "email": email_info,
+            "linkedin": li_info,
+            "latest_action": latest_action,
+            "actions": actions,
+            "created_at": app.created_at.isoformat() if app.created_at else None,
+            "updated_at": app.updated_at.isoformat() if app.updated_at else None
         }

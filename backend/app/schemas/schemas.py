@@ -164,9 +164,9 @@ class ApplicationQuestionSchema(BaseModel):
 
 # Application Package for Approval
 class ApplicationPackage(BaseModel):
-    application_id: str
-    job: JobResponse
-    match: MatchBreakdown
+    application_id: Optional[str] = None
+    job: Optional[JobResponse] = None
+    match: Optional[MatchBreakdown] = None
     recruiter: Optional[RecruiterResponse] = None
     tailored_resume_summary: Optional[str] = None
     tailored_resume_text: Optional[str] = None
