@@ -75,9 +75,20 @@ async def _prepare_single_application_task(
                 # 2. Generate factual application package artifacts
                 app_pkg_dto = await application_service.prepare_full_package(cand_schema, job_dict, rec_obj)
                 
-                # 3. Check existing Application or create new
-                app_res = await session.execute(select(Application).filter_by(candidate_id=cand_schema.id, job_id=job_entity.id))
+                # 3. Check existing Application or create new with canonical idempotency key
+                canonical_idempotency_key = f"{cand_schema.id}_{job_entity.id}_apply"
+                app_res = await session.execute(
+                    select(Application).filter(
+                        (Application.candidate_id == cand_schema.id) & (Application.job_id == job_entity.id)
+                    )
+                )
                 app_rec = app_res.scalars().first()
+                if not app_rec:
+                    app_res_by_key = await session.execute(
+                        select(Application).filter_by(idempotency_key=canonical_idempotency_key)
+                    )
+                    app_rec = app_res_by_key.scalars().first()
+
                 if not app_rec:
                     app_id = str(uuid.uuid4())
                     app_rec = Application(
@@ -85,13 +96,39 @@ async def _prepare_single_application_task(
                         run_id=run_id,
                         candidate_id=cand_schema.id,
                         job_id=job_entity.id,
+                        idempotency_key=canonical_idempotency_key,
                         status=ApplicationStatus.REVIEW_REQUIRED
                     )
                     session.add(app_rec)
+                    try:
+                        await session.flush()
+                    except Exception as e:
+                        logger.warning(f"Application insert conflict for {canonical_idempotency_key} ({e}). Rolling back and reusing existing record.")
+                        await session.rollback()
+                        dup_res = await session.execute(
+                            select(Application).filter(
+                                (Application.candidate_id == cand_schema.id) & (Application.job_id == job_entity.id)
+                            )
+                        )
+                        app_rec = dup_res.scalars().first()
+                        if not app_rec:
+                            dup_res2 = await session.execute(
+                                select(Application).filter_by(idempotency_key=canonical_idempotency_key)
+                            )
+                            app_rec = dup_res2.scalars().first()
+                        if app_rec:
+                            app_id = app_rec.id
+                            app_rec.run_id = run_id
+                            app_rec.status = ApplicationStatus.REVIEW_REQUIRED
+                        else:
+                            raise e
                 else:
                     app_id = app_rec.id
                     app_rec.run_id = run_id
                     app_rec.status = ApplicationStatus.REVIEW_REQUIRED
+                    if not app_rec.idempotency_key:
+                        app_rec.idempotency_key = canonical_idempotency_key
+
 
                 # 4. Generate Outreach Messages (Email & LinkedIn) with provenance
                 email_out = await outreach_service.generate_recruiter_email(cand_schema, job_dict, rec_obj)
@@ -576,3 +613,118 @@ async def get_application_status(application_id: str) -> Dict[str, Any]:
             "created_at": app.created_at.isoformat() if app.created_at else None,
             "updated_at": app.updated_at.isoformat() if app.updated_at else None
         }
+
+async def get_application(application_id: str) -> Dict[str, Any]:
+    """
+    [READ-ONLY] Retrieve complete application data including tailored resume, cover letter,
+    answers, recruiter details, and approval record for a specific application ID.
+    """
+    async with AsyncSessionLocal() as session:
+        app = await session.get(Application, application_id)
+        if not app:
+            return {"status": "NOT_FOUND", "message": f"Application '{application_id}' not found."}
+
+        job = await session.get(Job, app.job_id) if app.job_id else None
+        
+        # Fetch approval request
+        appr_res = await session.execute(select(ApprovalRequest).filter_by(application_id=app.id).order_by(ApprovalRequest.created_at.desc()))
+        approval_req = appr_res.scalars().first()
+        pkg_data = approval_req.package_data if approval_req else {}
+
+        # Fetch questions
+        q_res = await session.execute(select(ApplicationQuestion).filter_by(application_id=app.id))
+        questions = [{"question": q.question, "answer": q.answer, "status": q.status, "is_sensitive": q.is_sensitive} for q in q_res.scalars().all()]
+
+        # Fetch outreaches
+        o_res = await session.execute(select(OutreachMessage).filter_by(application_id=app.id))
+        outreaches = o_res.scalars().all()
+        email_msg = next((o for o in outreaches if o.channel == "EMAIL"), None)
+        li_msg = next((o for o in outreaches if o.channel == "LINKEDIN"), None)
+
+        return {
+            "status": "FOUND",
+            "application_id": app.id,
+            "candidate_id": app.candidate_id,
+            "job_id": app.job_id,
+            "run_id": app.run_id,
+            "idempotency_key": app.idempotency_key,
+            "application_status": app.status.value if hasattr(app.status, "value") else str(app.status),
+            "approval_status": approval_req.status.value if approval_req and hasattr(approval_req.status, "value") else (str(approval_req.status) if approval_req else "NONE"),
+            "job": {
+                "company": job.company if job else pkg_data.get("company"),
+                "title": job.title if job else pkg_data.get("title"),
+                "location": job.location if job else pkg_data.get("location"),
+                "application_url": job.application_url if job else None
+            },
+            "tailored_resume_summary": pkg_data.get("tailored_resume_summary"),
+            "tailored_resume_text": pkg_data.get("tailored_resume_text"),
+            "highlighted_skills": pkg_data.get("highlighted_skills", []),
+            "cover_letter": pkg_data.get("cover_letter"),
+            "questions": questions or pkg_data.get("questions", []),
+            "email_outreach": {
+                "recipient_email": email_msg.recipient_email if email_msg else None,
+                "recipient_name": email_msg.recipient_name if email_msg else None,
+                "subject": email_msg.subject if email_msg else None,
+                "body": email_msg.body if email_msg else None,
+                "email_status": email_msg.email_status if email_msg else None,
+                "status": email_msg.status if email_msg else None
+            } if email_msg else None,
+            "linkedin_outreach": {
+                "subject": li_msg.subject if li_msg else None,
+                "body": li_msg.body if li_msg else None,
+                "recipient_name": li_msg.recipient_name if li_msg else None,
+                "status": li_msg.status if li_msg else None
+            } if li_msg else None,
+            "created_at": app.created_at.isoformat() if app.created_at else None
+        }
+
+async def get_applications(
+    run_id: Optional[str] = None,
+    status: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 50
+) -> Dict[str, Any]:
+    """
+    [READ-ONLY] Retrieve paginated list of applications with filter by run_id or status.
+    """
+    async with AsyncSessionLocal() as session:
+        query = select(Application).order_by(Application.created_at.desc())
+        if run_id:
+            query = query.filter_by(run_id=run_id)
+        if status:
+            query = query.filter_by(status=status)
+
+        offset = (page - 1) * page_size
+        paginated_query = query.offset(offset).limit(page_size)
+        res = await session.execute(paginated_query)
+        apps = res.scalars().all()
+
+        job_ids = [a.job_id for a in apps if a.job_id]
+        jobs_map = {}
+        if job_ids:
+            j_res = await session.execute(select(Job).where(Job.id.in_(job_ids)))
+            for j in j_res.scalars().all():
+                jobs_map[j.id] = j
+
+        app_items = []
+        for a in apps:
+            j = jobs_map.get(a.job_id)
+            app_items.append({
+                "application_id": a.id,
+                "run_id": a.run_id,
+                "job_id": a.job_id,
+                "company": j.company if j else "Unknown",
+                "title": j.title if j else "Unknown",
+                "location": j.location if j else "Remote",
+                "status": a.status.value if hasattr(a.status, "value") else str(a.status),
+                "created_at": a.created_at.isoformat() if a.created_at else None
+            })
+
+        return {
+            "run_id": run_id,
+            "page": page,
+            "page_size": page_size,
+            "count": len(app_items),
+            "applications": app_items
+        }
+

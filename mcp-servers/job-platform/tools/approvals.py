@@ -248,3 +248,91 @@ async def reject_applications(approval_ids: List[str]) -> Dict[str, Any]:
             "total_requested": len(approval_ids),
             "rejected": rejected_count
         }
+
+async def approve_application(approval_id: str) -> Dict[str, Any]:
+    """
+    [WRITE / ACTION - REQUIRES USER CONFIRMATION]
+    Approves a single application by its approval ID.
+    Dispatches verified recruiter email and updates application status.
+    """
+    return await approve_applications(approval_ids=[approval_id])
+
+async def reject_application(approval_id: str) -> Dict[str, Any]:
+    """
+    [WRITE]
+    Rejects a single application by its approval ID.
+    """
+    return await reject_applications(approval_ids=[approval_id])
+
+async def approve_application_batch(approval_ids: List[str]) -> Dict[str, Any]:
+    """
+    [WRITE / ACTION - REQUIRES USER CONFIRMATION]
+    Batch approve applications by their approval IDs.
+    """
+    return await approve_applications(approval_ids=approval_ids)
+
+async def get_analytics(run_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    [READ-ONLY] Retrieve platform operations analytics: search runs, applications prepared,
+    approval rates, outreach stats, and match score distribution.
+    """
+    async with AsyncSessionLocal() as session:
+        # Total Runs
+        runs_res = await session.execute(select(AgentRun))
+        runs = runs_res.scalars().all()
+        total_runs = len(runs)
+
+        # Total Jobs
+        jobs_res = await session.execute(select(Job))
+        jobs = jobs_res.scalars().all()
+        total_jobs = len(jobs)
+
+        # Total Applications
+        apps_res = await session.execute(select(Application))
+        apps = apps_res.scalars().all()
+        total_apps = len(apps)
+
+        # Approvals summary
+        appr_res = await session.execute(select(ApprovalRequest))
+        approvals = appr_res.scalars().all()
+        pending_count = sum(1 for a in approvals if a.status == ApprovalStatus.PENDING)
+        approved_count = sum(1 for a in approvals if a.status == ApprovalStatus.APPROVED)
+        rejected_count = sum(1 for a in approvals if a.status == ApprovalStatus.REJECTED)
+
+        # Outreaches summary
+        out_res = await session.execute(select(OutreachMessage))
+        outreaches = out_res.scalars().all()
+        emails_sent = sum(1 for o in outreaches if o.channel == "EMAIL" and o.status == "SENT")
+        emails_draft = sum(1 for o in outreaches if o.channel == "EMAIL" and o.status == "DRAFT")
+        li_prepared = sum(1 for o in outreaches if o.channel == "LINKEDIN" and o.body)
+
+        # Matches score distribution
+        m_res = await session.execute(select(JobMatch))
+        matches = m_res.scalars().all()
+        strong_matches = sum(1 for m in matches if m.overall_score >= 85.0)
+        qualified_matches = sum(1 for m in matches if 75.0 <= m.overall_score < 85.0)
+        avg_score = round(sum(m.overall_score for m in matches) / max(len(matches), 1), 1) if matches else 0.0
+
+        return {
+            "status": "SUCCESS",
+            "total_search_runs": total_runs,
+            "total_jobs_indexed": total_jobs,
+            "total_applications": total_apps,
+            "approvals": {
+                "pending": pending_count,
+                "approved": approved_count,
+                "rejected": rejected_count,
+                "approval_rate": f"{round((approved_count / max(approved_count + rejected_count, 1)) * 100, 1)}%" if (approved_count + rejected_count) > 0 else "N/A"
+            },
+            "outreach": {
+                "emails_sent": emails_sent,
+                "emails_in_draft": emails_draft,
+                "linkedin_outreach_prepared": li_prepared
+            },
+            "matching": {
+                "average_match_score": avg_score,
+                "strong_matches": strong_matches,
+                "qualified_matches": qualified_matches
+            }
+        }
+

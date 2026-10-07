@@ -10,7 +10,6 @@ from app.schemas.schemas import (
     JobResponse,
     RecruiterResponse
 )
-from app.integrations.llm.provider import llm_provider
 
 logger = logging.getLogger(__name__)
 

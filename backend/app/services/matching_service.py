@@ -2,7 +2,6 @@ import logging
 import re
 from typing import Dict, Any, List, Tuple
 from app.schemas.schemas import CandidateProfileBase, MatchBreakdown
-from app.integrations.llm.provider import llm_provider
 
 logger = logging.getLogger(__name__)
 

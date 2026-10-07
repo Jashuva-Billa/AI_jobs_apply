@@ -29,14 +29,22 @@ from tools.candidate import get_candidate_resume as _get_candidate_resume
 from tools.jobs import search_jobs as _search_jobs
 from tools.jobs import get_search_run as _get_search_run
 from tools.jobs import get_search_results as _get_search_results
+from tools.jobs import get_job_details as _get_job_details
 from tools.matching import match_jobs as _match_jobs
 from tools.recruiters import find_recruiter as _find_recruiter
 from tools.applications import prepare_application as _prepare_application
 from tools.applications import prepare_applications_batch as _prepare_applications_batch
+from tools.applications import get_application as _get_application
+from tools.applications import get_applications as _get_applications
 from tools.applications import get_application_status as _get_application_status
 from tools.approvals import get_pending_approvals as _get_pending_approvals
+from tools.approvals import approve_application as _approve_application
+from tools.approvals import reject_application as _reject_application
+from tools.approvals import approve_application_batch as _approve_application_batch
 from tools.approvals import approve_applications as _approve_applications
 from tools.approvals import reject_applications as _reject_applications
+from tools.approvals import get_analytics as _get_analytics
+from tools.outreach import prepare_recruiter_outreach as _prepare_recruiter_outreach
 from tools.outreach import send_approved_email as _send_approved_email
 from tools.outreach import prepare_linkedin_outreach as _prepare_linkedin_outreach
 
@@ -65,6 +73,14 @@ async def get_candidate_profile(candidate_id: Optional[str] = None) -> Dict[str,
     return await _get_candidate_profile(candidate_id=candidate_id)
 
 @mcp.tool()
+async def get_candidate_resume(candidate_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    [READ-ONLY] Retrieve the full factual resume text and parsed skills for the candidate.
+    Use this tool before writing tailored cover letters or answering detailed application questions.
+    """
+    return await _get_candidate_resume(candidate_id=candidate_id)
+
+@mcp.tool()
 async def update_candidate_profile(
     candidate_id: Optional[str] = None,
     preferred_roles: Optional[List[str]] = None,
@@ -81,14 +97,6 @@ async def update_candidate_profile(
         preferred_locations=preferred_locations,
         skills=skills
     )
-
-@mcp.tool()
-async def get_candidate_resume(candidate_id: Optional[str] = None) -> Dict[str, Any]:
-    """
-    [READ-ONLY] Retrieve the full factual resume text and parsed skills for the candidate.
-    Use this tool before writing tailored cover letters or answering detailed application questions.
-    """
-    return await _get_candidate_resume(candidate_id=candidate_id)
 
 # ---------------------------------------------------------------------------
 # 2. JOB DISCOVERY & SEARCH TOOLS
@@ -133,6 +141,13 @@ async def get_search_results(run_id: str, page: int = 1, page_size: int = 100) -
     Allows retrieving all 100+ discovered jobs without losing context across conversations.
     """
     return await _get_search_results(run_id=run_id, page=page, page_size=page_size)
+
+@mcp.tool()
+async def get_job_details(job_id: str) -> Dict[str, Any]:
+    """
+    [READ-ONLY] Retrieve complete description, requirements, skills, and evidence for a specific job ID.
+    """
+    return await _get_job_details(job_id=job_id)
 
 # ---------------------------------------------------------------------------
 # 3. DETERMINISTIC 7-FACTOR MATCHING TOOL
@@ -198,6 +213,34 @@ async def prepare_applications_batch(
     """
     return await _prepare_applications_batch(run_id=run_id, job_ids=job_ids, max_concurrency=max_concurrency)
 
+@mcp.tool()
+async def get_application(application_id: str) -> Dict[str, Any]:
+    """
+    [READ-ONLY] Retrieve complete application package, tailored resume, cover letter, and answers for a specific application ID.
+    """
+    return await _get_application(application_id=application_id)
+
+@mcp.tool()
+async def get_applications(
+    run_id: Optional[str] = None,
+    status: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 50
+) -> Dict[str, Any]:
+    """
+    [READ-ONLY] Retrieve paginated list of created applications with optional filtering by run_id or status.
+    """
+    return await _get_applications(run_id=run_id, status=status, page=page, page_size=page_size)
+
+@mcp.tool()
+async def get_application_status(application_id: str) -> Dict[str, Any]:
+    """
+    [READ-ONLY] Retrieve the current persisted status, approval state, outreach delivery details,
+    and audit history for a specific application ID across all lifecycle stages (PENDING, APPROVED, REJECTED, SUBMITTED, FAILED).
+    Guaranteed read-only: never mutates state, sends emails, or performs outreach.
+    """
+    return await _get_application_status(application_id=application_id)
+
 # ---------------------------------------------------------------------------
 # 6. HUMAN-IN-THE-LOOP (HITL) APPROVAL TOOLS
 # ---------------------------------------------------------------------------
@@ -210,6 +253,30 @@ async def get_pending_approvals(run_id: Optional[str] = None) -> Dict[str, Any]:
     Always present this list to the user and request explicit confirmation before approving.
     """
     return await _get_pending_approvals(run_id=run_id)
+
+@mcp.tool()
+async def approve_application(approval_id: str) -> Dict[str, Any]:
+    """
+    [WRITE / ACTION - REQUIRES EXPLICIT USER CONFIRMATION]
+    Approves a single application in SQL and dispatches authorized recruiter outreach email.
+    Only call this tool after the human user has explicitly authorized the action.
+    """
+    return await _approve_application(approval_id=approval_id)
+
+@mcp.tool()
+async def reject_application(approval_id: str) -> Dict[str, Any]:
+    """
+    [WRITE] Rejects a single application approval record in SQL.
+    """
+    return await _reject_application(approval_id=approval_id)
+
+@mcp.tool()
+async def approve_application_batch(approval_ids: List[str]) -> Dict[str, Any]:
+    """
+    [WRITE / ACTION - REQUIRES EXPLICIT USER CONFIRMATION]
+    Approves a batch of applications in SQL and dispatches authorized recruiter emails.
+    """
+    return await _approve_application_batch(approval_ids=approval_ids)
 
 @mcp.tool()
 async def approve_applications(approval_ids: List[str]) -> Dict[str, Any]:
@@ -229,8 +296,16 @@ async def reject_applications(approval_ids: List[str]) -> Dict[str, Any]:
     return await _reject_applications(approval_ids=approval_ids)
 
 # ---------------------------------------------------------------------------
-# 7. OUTREACH TOOLS
+# 7. OUTREACH & ANALYTICS TOOLS
 # ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def prepare_recruiter_outreach(application_id: str) -> Dict[str, Any]:
+    """
+    [READ/PREPARE] Prepares structured outreach drafts (email + compliant LinkedIn note) for an application.
+    Does not dispatch anything externally.
+    """
+    return await _prepare_recruiter_outreach(application_id=application_id)
 
 @mcp.tool()
 async def send_approved_email(application_id: str) -> Dict[str, Any]:
@@ -250,13 +325,12 @@ async def prepare_linkedin_outreach(application_id: str) -> Dict[str, Any]:
     return await _prepare_linkedin_outreach(application_id=application_id)
 
 @mcp.tool()
-async def get_application_status(application_id: str) -> Dict[str, Any]:
+async def get_analytics(run_id: Optional[str] = None) -> Dict[str, Any]:
     """
-    [READ-ONLY] Retrieve the current persisted status, approval state, outreach delivery details,
-    and audit history for a specific application ID across all lifecycle stages (PENDING, APPROVED, REJECTED, SUBMITTED, FAILED).
-    Guaranteed read-only: never mutates state, sends emails, or performs outreach.
+    [READ-ONLY] Retrieve platform operations analytics: search runs, applications prepared,
+    approval rates, outreach stats, and match score distribution.
     """
-    return await _get_application_status(application_id=application_id)
+    return await _get_analytics(run_id=run_id)
 
 # ---------------------------------------------------------------------------
 # HTTP / SSE / ASGI SERVER MOUNTING
@@ -271,11 +345,12 @@ async def health_check(request):
         "mcp_version": "2.x",
         "transports": ["/sse", "/mcp"],
         "auth": auth_meta,
-        "registered_tools_count": 16,
+        "registered_tools_count": 22,
         "candidate": "Jashuva Billa",
         "experience": "2.9 years",
         "role": "AI Engineer / Generative AI / Agentic AI / RAG"
     })
+
 
 async def get_instructions_endpoint(request):
     """Returns the agent system instructions."""

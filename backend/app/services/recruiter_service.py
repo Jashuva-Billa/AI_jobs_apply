@@ -3,8 +3,6 @@ from typing import Dict, Any, Optional
 from app.schemas.schemas import RecruiterBase
 from app.config.settings import settings
 
-from app.integrations.openai.web_research import openai_web_research
-
 from app.services.email_resolution_service import sanitize_recruiter_name, validate_company_domain
 
 logger = logging.getLogger(__name__)
@@ -85,35 +83,13 @@ class RecruiterDiscoveryService:
                     source_evidence=data.get("source_evidence")
                 )
 
-        # 2. OpenAI Web Research for recruiters (Live web intelligence)
-        if not settings.DEMO_MODE and settings.OPENAI_WEB_SEARCH_ENABLED:
-            try:
-                recruiter_res = await openai_web_research.research_recruiter(company_clean, job_title)
-                if recruiter_res and recruiter_res.name:
-                    clean_name, status = sanitize_recruiter_name(recruiter_res.name, company_clean)
-                    valid_email = recruiter_res.email
-                    if valid_email:
-                        is_val, _ = validate_company_domain(valid_email, company_clean)
-                        if not is_val:
-                            valid_email = None
-
-                    if clean_name:
-                        logger.info(f"OpenAI Web Search discovered recruiter: {clean_name} at {company_clean}")
-                        return RecruiterBase(
-                            name=clean_name,
-                            title=recruiter_res.title or "Technical Recruiter",
-                            company_name=company_clean,
-                            public_email=valid_email,
-                            linkedin_url=recruiter_res.linkedin_url or f"https://www.linkedin.com/search/results/people/?keywords={company_clean}+technical+recruiter",
-                            source_evidence=recruiter_res.source_url or f"OpenAI Web Research for {company_clean}"
-                        )
-            except Exception as e:
-                logger.info(f"OpenAI recruiter research fallback for {company_clean}: {e}")
-
-        # 3. Live Web Search for public recruiter profiles if not in demo mode
+        # 2. Live Web Search for public recruiter profiles if not in demo mode
         if not settings.DEMO_MODE:
             try:
-                from duckduckgo_search import DDGS
+                try:
+                    from ddgs import DDGS
+                except ImportError:
+                    from duckduckgo_search import DDGS
                 ddgs = DDGS()
                 query = f'"{company_clean}" "technical recruiter" OR "talent acquisition" site:linkedin.com/in'
                 results = list(ddgs.text(query, max_results=3))

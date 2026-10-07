@@ -17,7 +17,7 @@ start "Streamlit Dashboard (Port 8501)" cmd /k "cd /d %~dp0 && streamlit run str
 
 timeout /t 2 /nobreak >nul
 
-echo [3/4] Starting Job Platform MCP Server on http://localhost:8001 (16 Tools)...
+echo [3/4] Starting Job Platform MCP Server on http://localhost:8001 (22 Tools)...
 start "Job Platform MCP Server (Port 8001)" cmd /k "cd /d %~dp0 && python mcp-servers/job-platform/server.py"
 
 timeout /t 2 /nobreak >nul
@@ -35,7 +35,7 @@ echo  • Local MCP Server:      http://localhost:8001/health
 echo  • MCP SSE Transport:     http://localhost:8001/sse
 echo  • ChatGPT MCP URL:       Check the Ngrok window for: https://*.ngrok-free.dev/sse
 echo.
-echo  Registered MCP Tools:   16 Tools (Candidate, Search, Match, HITL, Status, Outreach)
+echo  Registered MCP Tools:   22 Tools (Candidate, Search, Match, HITL, Status, Outreach, Analytics)
 echo ==============================================================================
 echo.
 pause

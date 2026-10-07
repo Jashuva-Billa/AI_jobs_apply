@@ -1,20 +1,23 @@
 import logging
 import asyncio
-from typing import Optional, Dict, Any, List
-from openai import AsyncOpenAI
+from typing import Optional, Any
+try:
+    from openai import AsyncOpenAI
+except ImportError:
+    AsyncOpenAI = None
+
 from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
 class OpenAIClientWrapper:
     """
-    Centralized OpenAI Client wrapper supporting the OpenAI Responses API
-    with the built-in Web Search tool.
+    Optional legacy helper - NOT used in ChatGPT Web + MCP workflow.
     """
 
     def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or settings.OPENAI_API_KEY
-        self.client: Optional[AsyncOpenAI] = AsyncOpenAI(api_key=self.api_key) if self.api_key else None
+        self.api_key = api_key or getattr(settings, "OPENAI_API_KEY", None)
+        self.client: Optional[Any] = AsyncOpenAI(api_key=self.api_key) if (AsyncOpenAI and self.api_key) else None
 
     def is_configured(self) -> bool:
         return self.client is not None and bool(self.api_key)

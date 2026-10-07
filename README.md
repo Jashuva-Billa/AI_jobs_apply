@@ -1,222 +1,155 @@
-# 🚀 Antigravity AI — Agentic Job Search & Application Platform
+# 🚀 Antigravity AI — Agentic Job Search & Application Platform (ChatGPT Web + MCP)
 
-An enterprise-grade, autonomous multi-agent AI system built with **FastAPI**, **LangGraph**, **Streamlit**, and **Model Context Protocol (MCP)**. 
+An enterprise-grade, autonomous job application platform designed for **ChatGPT Web + Model Context Protocol (MCP)** integration.
 
-Upload your resume once, define your career goals in natural language (either in the local dashboard or directly in **ChatGPT Web**), and let autonomous agents discover verified job openings, perform deterministic 7-factor matching, research recruiters, and prepare tailored application packages—all strictly governed by **Human-in-the-Loop (HITL)** approval before any external action is taken.
+> [!IMPORTANT]
+> **Zero LLM API Dependency:** The backend does **NOT** require OpenAI API (`OPENAI_API_KEY`) or Google Gemini API (`GEMINI_API_KEY`) credentials. **ChatGPT Web** serves as the AI reasoning and conversational interface, while the backend provides deterministic data persistence, multi-source job discovery, 7-factor matching, recruiter verification, idempotency protection, and Human-in-the-Loop (HITL) execution.
 
 ---
 
-## 📌 Architecture & Dual-Mode Execution
-
-The platform supports two complementary operational workflows:
+## 📌 Target Architecture
 
 ```text
-                                  ┌───────────────────────────────────────────────┐
-                                  │           ChatGPT Web (Custom MCP)            │
-                                  └──────────────────────┬────────────────────────┘
-                                                         │ HTTPS (ngrok /sse)
-                                                         ▼
-┌───────────────────────────┐     ┌───────────────────────────────────────────────┐
-│   Streamlit Web UI        │     │         Job Platform MCP Server               │
-│   (Port 8501)             │     │         (Port 8001)                           │
-└─────────────┬─────────────┘     └──────────────────────┬────────────────────────┘
-              │                                          │
-              │ REST / Local Async                       │ SQLAlchemy Async
-              ▼                                          ▼
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                      Authoritative SQL Database & State Layer                   │
-│         (Candidate Profile, Live Jobs, 7-Factor Matches, Pending Approvals)     │
-└────────────────────────────────────────┬────────────────────────────────────────┘
-                                         │
-                                         ▼
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│               Deterministic Multi-Agent Engine (FastAPI + LangGraph)            │
-│  [Job Research] ➔ [7-Factor Matcher] ➔ [Recruiter Agent] ➔ [Application Agent]  │
-└────────────────────────────────────────┬────────────────────────────────────────┘
-                                         │
-                                         ▼
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                     🛡️ MANDATORY HUMAN-IN-THE-LOOP (HITL) GATE                  │
-│            • No auto-applying   • No auto-emailing   • Explicit Authorization   │
-└─────────────────────────────────────────────────────────────────────────────────┘
+                    CHATGPT WEB (AI Reasoning Layer)
+                                 │
+                                 │ Model Context Protocol (MCP SSE)
+                                 ▼
+                    JOB PLATFORM MCP SERVER (Port 8001)
+                                 │
+              ┌──────────────────┼──────────────────┐
+              ▼                  ▼                  ▼
+           FastAPI            SQL DB          External Tools
+         (Port 8000)      (Single Source)           │
+              │                               ┌─────┴─────┐
+              ▼                               ▼           ▼
+         Job Search                         Email     LinkedIn
+      (RemoteOK, Arbeitnow, Web)           (SMTP)     (Manual)
+              │
+              ▼
+     7-Factor Match Engine (Deterministic)
+              │
+              ▼
+      Application Engine (Canonical Idempotency)
+              │
+              ▼
+     🛡️ MANDATORY HUMAN APPROVAL GATE (HITL)
+              │
+              ▼
+       Approved Actions Only
 ```
 
-### 1. Mode A: ChatGPT Web + MCP (Conversational AI Assistant)
-ChatGPT connects via the **Model Context Protocol (MCP)** to discover and invoke tools directly in conversation. You chat with ChatGPT, ask it to find roles and prepare applications, review generated packages inside ChatGPT, and explicitly authorize actions.
-
-### 2. Mode B: Streamlit Dashboard UI
-Interactive browser dashboard with visual Kanban boards, real-time SSE telemetry, match score analytics, and one-click package inspection and approval.
+### Division of Responsibilities:
+- **ChatGPT Web:** Understanding user natural language directives, reasoning over search parameters, deciding which MCP tools to invoke, analyzing matches, explaining recommendations, preparing outreach copy, and requesting human approval.
+- **Backend / MCP Server:** Data persistence, 7-factor deterministic match scoring, job retrieval & normalization, recruiter domain verification, canonical idempotency (`{candidate_id}_{job_id}_apply`), MySQL 1062 duplicate error handling, audit logging, and authorized email dispatch.
 
 ---
 
-## ⚡ Server Ecosystem (What You Need to Run)
+## 🛠️ Complete Ecosystem & Startup Guide
 
-To run the full end-to-end platform with both the local UI and ChatGPT MCP integration, start these services:
+To run the complete platform with both the Streamlit operations dashboard and ChatGPT Web MCP integration, start these services:
 
 | Service | Script / Command | Port / URL | Purpose |
 | :--- | :--- | :--- | :--- |
-| **1. FastAPI Backend** | `uvicorn app.main:app --port 8000` | `http://localhost:8000` | REST API, LangGraph orchestration, SSE streaming |
-| **2. Streamlit Dashboard** | `streamlit run streamlit_app.py --server.port 8501` | `http://localhost:8501` | Interactive visual dashboard & Kanban board |
-| **3. MCP Server** | `python mcp-servers/job-platform/server.py` | `http://localhost:8001` | Official MCP SSE protocol server & tool execution |
+| **1. FastAPI Backend** | `uvicorn app.main:app --port 8000` | `http://localhost:8000` | REST API, data persistence, deterministic matching |
+| **2. Streamlit Dashboard** | `streamlit run streamlit_app.py --server.port 8501` | `http://localhost:8501` | 8-Tab operations dashboard & visual review center |
+| **3. Job Platform MCP Server** | `python mcp-servers/job-platform/server.py` | `http://localhost:8001` | MCP SSE server exposing 22 business tools |
 | **4. Ngrok Tunnel** | `ngrok http 8001` | `https://<subdomain>.ngrok-free.dev` | Secure public HTTPS tunnel for ChatGPT Web |
 
----
-
-## 🛠️ Complete Step-by-Step Startup Guide
-
-### Step 1: Clone & Configure Environment
-
-Ensure you have created your `.env` file from `.env.example`:
-
-```bash
-# Copy example configuration
-cp .env.example .env
-```
-
-Ensure the key parameters are configured in your `.env`:
-```env
-# Database (SQLite by default, MySQL optional)
-DATABASE_URL=sqlite+aiosqlite:///./jobs_platform.db
-
-# LLM Provider (Gemini Primary, OpenAI Fallback)
-LLM_PROVIDER=gemini
-GEMINI_API_KEY=your_gemini_api_key
-OPENAI_API_KEY=your_openai_api_key
-
-# MCP Server
-MCP_SERVER_NAME=job-platform-mcp
-MCP_SERVER_HOST=0.0.0.0
-MCP_SERVER_PORT=8001
-MCP_AUTH_MODE=development
-ALLOWED_HOSTS=localhost,127.0.0.1,celery-ecosystem-suspense.ngrok-free.dev
-MCP_PUBLIC_URL=https://celery-ecosystem-suspense.ngrok-free.dev
-```
+You can also launch all services at once using [`start_services.bat`](file:///c:/Users/Jashuva/Desktop/AI_jobs_apply/start_services.bat).
 
 ---
 
-### Step 2: Launch the 4 Core Services
+## 🤖 ChatGPT Web + MCP Integration Setup
 
-Open **4 separate terminal windows** (or use the one-click `start_services.bat` launcher):
-
-#### Terminal 1: FastAPI Backend
-```powershell
-# In project root
-cd backend
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
-- API Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
-- Health Check: [http://localhost:8000/health](http://localhost:8000/health)
-
-#### Terminal 2: Streamlit Dashboard UI
-```powershell
-# In project root
-streamlit run streamlit_app.py --server.port 8501
-```
-- Dashboard: [http://localhost:8501](http://localhost:8501)
-
-#### Terminal 3: Job Platform MCP Server
-```powershell
-# In project root
-python mcp-servers/job-platform/server.py
-```
-- Local SSE Endpoint: `http://localhost:8001/sse`
-- Health Endpoint: `http://localhost:8001/health`
-
-#### Terminal 4: Ngrok HTTPS Tunnel (For ChatGPT)
-```powershell
-# In project root
-ngrok http 8001
-```
-- Note the public forwarding URL displayed by ngrok (e.g. `https://celery-ecosystem-suspense.ngrok-free.dev`).
-
----
-
-## 🤖 ChatGPT Web + MCP Integration Guide
-
-You can connect your local system directly to **ChatGPT Web** (ChatGPT Plus, Team, or Enterprise) as a custom MCP connector.
-
-### Connecting in ChatGPT:
 1. Open [ChatGPT Web](https://chatgpt.com).
-2. Go to **Settings** ➔ **Apps & Connectors** (or **Explore GPTs / Actions**).
-3. Select **Add Custom MCP Server / Connector**.
-4. Configure the server:
+2. Go to **Settings** ➔ **Apps & Connectors** (or **Custom GPTs / Actions**).
+3. Click **Add Custom MCP Server / Connector**.
+4. Configure the connection:
    - **Server Name:** `job-platform-mcp`
-   - **Server URL:** `https://<your-ngrok-subdomain>.ngrok-free.dev/sse` (e.g., `https://celery-ecosystem-suspense.ngrok-free.dev/sse`)
+   - **Server URL:** `https://<your-subdomain>.ngrok-free.dev/sse` (e.g., `https://celery-ecosystem-suspense.ngrok-free.dev/sse`)
    - **Authentication:** `None` (Development mode)
 5. Click **Connect & Scan Tools**.
-   ChatGPT will automatically discover and register all **16 business tools**.
+   ChatGPT will automatically discover and register all **22 business tools**.
 
 ---
 
-## 🧰 Available MCP Tools Reference (16 Total)
+## 🧰 Registered MCP Tools Reference (22 Tools)
 
-| Tool Name | Type | Description |
-| :--- | :--- | :--- |
-| `get_candidate_profile` | `READ-ONLY` | Retrieves structured candidate profile (skills, experience, preferences) from SQL. |
-| `update_candidate_profile` | `WRITE` | Updates candidate roles, location preferences, or skills in SQL. |
-| `get_candidate_resume` | `READ-ONLY` | Retrieves full resume text and parsed competencies. |
-| `search_jobs` | `READ/DISCOVERY` | Discovers live verified job listings across RemoteOK, Arbeitnow, and career pages. |
-| `get_search_run` | `READ-ONLY` | Retrieves durable search run metrics and step progress. |
-| `get_search_results` | `READ-ONLY` | Retrieves paginated discovered jobs and match evaluations. |
-| `match_jobs` | `COMPUTATION` | Executes deterministic 7-factor scoring engine (Skills 30%, Exp 20%, Role 20%, Loc 15%). |
-| `find_recruiter` | `READ/SEARCH` | Discovers verified public technical recruiters without email hallucination. |
-| `prepare_application` | `WRITE/HITL` | Prepares tailored resume, cover letter, and outreach drafts; inserts `PENDING` approval record. |
-| `prepare_applications_batch` | `WRITE/BATCH` | Prepares application packages for all qualified jobs under bounded concurrency. |
-| `get_pending_approvals` | `READ-ONLY` | Retrieves all pending applications awaiting human authorization. |
-| `get_application_status` | `READ-ONLY` | Retrieves lifecycle status, approval state, and complete audit history for any application ID. |
-| `approve_applications` | `WRITE/ACTION` | **Explicit Human Gate:** Approves applications by exact UUID, triggers authorized email outreach. |
-| `reject_applications` | `WRITE` | Rejects application approval records by exact UUID. |
-| `send_approved_email` | `WRITE/ACTION` | Dispatches outreach email for explicitly approved applications (idempotency-guarded). |
-| `prepare_linkedin_outreach` | `READ-ONLY` | Generates compliant LinkedIn outreach copy and deep-links to recruiter profiles. |
-
----
-
-## 💬 Example Prompt for ChatGPT Web
-
-Once connected, you can converse naturally with ChatGPT:
-
-> *"Find me remote AI Engineer and GenAI Engineer roles matching my resume in India or Remote-friendly companies. Search for live openings, rank them using the deterministic 7-factor engine, and prepare application packages for all qualified matches. Present the pending approval summary table before taking any external action."*
-
-**What happens autonomously:**
-1. ChatGPT inspects candidate profile via `get_candidate_profile`.
-2. Searches live openings via `search_jobs`.
-3. Runs deterministic 7-factor scoring via `match_jobs`.
-4. Prepares tailored resume summaries, cover letters, and outreach drafts via `prepare_applications_batch` (status: `PENDING`).
-5. Fetches pending applications via `get_pending_approvals` and formats a review table with exact UUIDs.
-6. Awaits your approval (e.g., *"Approve application `<APPROVAL_UUID>`"*) before calling `approve_applications`.
-7. Inspects status at any point via `get_application_status`.
+| Tool Name | Type | Action / Safety | Description |
+| :--- | :--- | :--- | :--- |
+| `get_candidate_profile` | Candidate | `READ-ONLY` | Retrieves candidate factual profile, technical skills, and experience from SQL. |
+| `get_candidate_resume` | Candidate | `READ-ONLY` | Returns raw and parsed resume text. |
+| `update_candidate_profile` | Candidate | `WRITE` | Updates candidate profile fields in SQL. |
+| `search_jobs` | Job Search | `DISCOVERY` | Searches live jobs across RemoteOK, Arbeitnow, and DuckDuckGo up to 100+ jobs. |
+| `get_search_run` | Persistence | `READ-ONLY` | Retrieves durable `SearchRun` status and processing counters from SQL. |
+| `get_search_results` | Persistence | `READ-ONLY` | Fetches discovered jobs and match records for a search run. |
+| `get_job_details` | Job Search | `READ-ONLY` | Retrieves comprehensive details for a specific job. |
+| `match_jobs` | Matching | `COMPUTATION` | Deterministic 7-factor scoring (Skills 30%, Exp 20%, Role 20%, Loc 15%, Cloud 5%, Edu 5%, Domain 5%). |
+| `find_recruiter` | Recruiter | `DISCOVERY` | Discovers verified public recruiter contacts without fabricating emails. |
+| `prepare_application` | Application | `WRITE / HITL` | Generates tailored package and creates `PENDING` approval record with canonical idempotency. |
+| `prepare_applications_batch` | Application | `BATCH` | Parallel application package generation under bounded concurrency (max 10). |
+| `get_application` | Application | `READ-ONLY` | Retrieves a single application package and details by application ID. |
+| `get_applications` | Application | `READ-ONLY` | Queries persisted application records with optional status filtering. |
+| `get_application_status` | Application | `READ-ONLY` | Read-only application and approval audit status checker. |
+| `get_pending_approvals` | HITL Approval | `READ-ONLY` | Retrieves pending application approval requests awaiting human review. |
+| `approve_application` | HITL Approval | `ACTION` | Approves a specific application by ID and dispatches authorized outreach. |
+| `reject_application` | HITL Approval | `WRITE` | Rejects a specific application by ID. |
+| `approve_application_batch` | HITL Approval | `ACTION` | Batch approves multiple applications by ID. |
+| `approve_applications` | HITL Approval | `ACTION` | Approves list of application approval IDs upon explicit confirmation. |
+| `reject_applications` | HITL Approval | `WRITE` | Rejects list of application approval IDs in SQL. |
+| `prepare_recruiter_outreach` | Outreach | `READ-ONLY` | Prepares structured email and LinkedIn message copy for an application. |
+| `send_approved_email` | Outreach | `ACTION` | Sends recruiter email **ONLY** for `APPROVED` applications (Idempotent). |
+| `prepare_linkedin_outreach` | Outreach | `READ-ONLY` | Generates 100% compliant LinkedIn copy and direct recruiter profile search links. |
+| `get_analytics` | Analytics | `READ-ONLY` | Retrieves comprehensive application metrics and conversion funnel statistics. |
 
 ---
 
-## 🛡️ Human-in-the-Loop (HITL) Safety Guarantees
+## 🛡️ Deterministic Matching & Human Governance
 
-- **Zero Silent Applications:** The platform is architected so that `prepare_application` and `prepare_applications_batch` **never** apply or email automatically.
-- **Strict State Transitions:** Packages enter `PENDING_APPROVAL` status. Only explicit human invocation of `approve_applications` allows email dispatch.
-- **Idempotency Protection:** Every outbound email is keyed by `candidate_id:job_id:EMAIL_OUTREACH` to prevent accidental duplicate dispatches.
-- **Compliance:** 100% compliant with LinkedIn Terms of Service (uses deep-links and manual copy rather than bot automation or cookie theft).
+### 1. Deterministic 7-Factor Matching Model
+Match scores are strictly computed by the backend:
+- **Core Skills:** 30%
+- **Years of Experience:** 20%
+- **Role Relevance:** 20%
+- **Location / Remote Policy:** 15%
+- **Cloud Proficiency:** 5%
+- **Education Alignment:** 5%
+- **Domain Specialization:** 5%
+
+### 2. Canonical Idempotency & Database Integrity
+Applications use the strict canonical idempotency key:
+```text
+{candidate_id}_{job_id}_apply
+```
+If an application already exists or a MySQL 1062 duplicate key conflict occurs, the transaction rolls back gracefully and reuses the existing record without HTTP 500 crashes.
+
+### 3. Mandatory Human-in-the-Loop (HITL)
+- Applications and outreach emails are **NEVER** submitted automatically.
+- Application packages remain in `PENDING` status until the user explicitly calls `approve_application` or confirms through the Streamlit Approval Center.
+- LinkedIn outreach remains 100% compliant: generates personalized message copy with 1-click deep links, without browser automation, Selenium, or cookie scraping.
+
+---
+
+## 🖥️ Streamlit Operations Dashboard (8 Tabs)
+
+The Streamlit UI ([`streamlit_app.py`](file:///c:/Users/Jashuva/Desktop/AI_jobs_apply/streamlit_app.py)) serves as an operational dashboard:
+1. **👤 Candidate Profile:** Factual candidate profile and resume ingestion.
+2. **🔍 Job Search:** Search trigger and execution overview.
+3. **💼 Search Results:** Evaluated jobs with 7-factor score breakdowns.
+4. **📊 Applications:** Visual Kanban pipeline across lifecycle stages.
+5. **🛡️ Human Intervention / Approval Center:** Individual & batch approval review bar.
+6. **👥 Recruiters:** Verified recruiter contacts with source evidence citations.
+7. **📈 Analytics:** Telemetry, KPIs, and match score distribution.
+8. **⚡ System / MCP Status:** Real-time health status of MCP Server, SQL Database, Email, and LinkedIn.
 
 ---
 
 ## 🧪 Running Automated Tests
 
-Run the full automated test suite covering all services, MCP tools, and HITL gates:
+Run the full automated test suite covering all services, MCP tools, and idempotency:
 
 ```powershell
-# Run MCP Tool suite
-python backend/tests/test_mcp_server.py
-
-# Run Prepare Application & Approval workflow tests
-python backend/tests/test_prepare_application.py
-
-# Run Read-Only Application Status audit tests
-python backend/tests/test_get_application_status.py
-
-# Run full pytest suite
 pytest backend/tests/ -v
 ```
 
----
-
-## 📄 License
-
-MIT License. Designed and engineered for production-grade agentic AI workflows.
+All 72+ tests pass with zero external LLM API dependencies.

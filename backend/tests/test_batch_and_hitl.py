@@ -249,15 +249,12 @@ async def test_no_demo_jobs_when_demo_mode_false():
     search_engine = MultiSourceJobSearchEngine()
     
     with patch.object(settings, "DEMO_MODE", False):
-        with patch.object(search_engine.openai_provider, "search_criteria", new_callable=AsyncMock) as mock_oai:
-            mock_oai.return_value = []
-            with patch.object(search_engine.api_provider, "search", new_callable=AsyncMock) as mock_api:
-                mock_api.return_value = []
-                with patch.object(search_engine.web_provider, "search", new_callable=AsyncMock) as mock_web:
-                    mock_web.return_value = []
-                    
-                    results = await search_engine.search_jobs(["AI Engineer"], ["Remote"], True, SearchCriteria(roles=["AI Engineer"]))
-                    assert len(results) == 0, "When DEMO_MODE=false and live providers return 0, no curated jobs should be injected"
+        with patch.object(search_engine.api_provider, "search", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = []
+            with patch.object(search_engine.web_provider, "search", new_callable=AsyncMock) as mock_web:
+                mock_web.return_value = []
+                results = await search_engine.search_jobs(["AI Engineer"], ["Remote"], True, SearchCriteria(roles=["AI Engineer"]))
+                assert len(results) == 0, "When DEMO_MODE=false and live providers return 0, no curated jobs should be injected"
 
 # ----------------- TEST 11: Match Thresholds Respected -----------------
 def test_configured_thresholds_respected(sample_candidate):

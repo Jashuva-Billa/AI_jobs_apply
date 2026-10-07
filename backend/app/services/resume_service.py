@@ -9,12 +9,11 @@ from app.schemas.schemas import (
     EducationItem,
     ProjectItem
 )
-from app.integrations.llm.provider import llm_provider
 
 logger = logging.getLogger(__name__)
 
 class ResumeService:
-    """Extracts raw text from PDF/DOCX resumes and parses structured CandidateProfile."""
+    """Extracts raw text from PDF/DOCX resumes and parses structured CandidateProfile deterministically."""
 
     def extract_text_from_pdf(self, file_bytes: bytes) -> str:
         try:
@@ -30,39 +29,8 @@ class ResumeService:
             raise ValueError(f"Could not parse PDF resume: {e}")
 
     async def parse_resume_to_candidate_profile(self, resume_text: str, filename: str = "resume.pdf") -> CandidateProfileBase:
-        system_prompt = (
-            "You are an expert Resume Parser and Candidate Profiler. "
-            "Your task is to extract structured candidate information from the provided resume text. "
-            "RULES:\n"
-            "1. DO NOT invent missing resume information. Extract only what is present or directly implied.\n"
-            "2. Extract comprehensive skills list, technical skills, cloud skills, frameworks, models, databases.\n"
-            "3. Extract work experience, education, projects, contact information, years of experience, and summary.\n"
-            "4. Format the output strictly matching the CandidateProfileBase schema."
-        )
-
-        user_prompt = f"Resume Filename: {filename}\n\nResume Content:\n{resume_text}"
-
-        try:
-            profile = await llm_provider.generate_structured(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                schema=CandidateProfileBase
-            )
-            
-            # Post-process fallback heuristics if fields are empty
-            if not profile.name or profile.name == "Candidate":
-                profile.name = self._heuristic_extract_name(resume_text)
-            if not profile.email or "example.com" in profile.email:
-                profile.email = self._heuristic_extract_email(resume_text) or "candidate@example.com"
-            if profile.years_of_experience <= 0:
-                profile.years_of_experience = self._heuristic_extract_yoe(resume_text)
-            if not profile.skills:
-                profile.skills = self._heuristic_extract_skills(resume_text)
-
-            return profile
-        except Exception as e:
-            logger.warning(f"Structured LLM parsing encountered issue: {e}. Utilizing regex/heuristic parser.")
-            return self._heuristic_parse_candidate(resume_text, filename)
+        """Parses factual resume text into CandidateProfileBase without LLM API calls."""
+        return self._heuristic_parse_candidate(resume_text, filename)
 
     def _heuristic_extract_name(self, text: str) -> str:
         lines = [line.strip() for line in text.splitlines() if line.strip()]

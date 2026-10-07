@@ -4,7 +4,6 @@ import logging
 from typing import List, Dict, Any, Tuple
 from app.schemas.schemas import SearchCriteria, JobBase, JobResponse
 from app.integrations.web.search import web_job_search
-from app.integrations.llm.provider import llm_provider
 
 logger = logging.getLogger(__name__)
 

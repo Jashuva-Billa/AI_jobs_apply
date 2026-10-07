@@ -9,7 +9,6 @@ from app.services.matching_service import matching_service
 from app.services.recruiter_service import recruiter_service
 from app.services.outreach_service import outreach_service
 from app.services.application_service import application_service
-from app.integrations.llm.provider import llm_provider
 from app.integrations.email.provider import email_provider
 from app.config.settings import settings
 
@@ -29,17 +28,48 @@ def log_event(state: JobApplicationState, agent_name: str, step: str, message: s
 
 async def parse_prompt_node(state: JobApplicationState) -> Dict[str, Any]:
     prompt = state.get("user_prompt", "")
-    system_prompt = (
-        "You are an expert Job Search Intent Analyzer. Convert the user's natural language request into structured SearchCriteria."
-    )
-    criteria = await llm_provider.generate_structured(system_prompt, prompt, SearchCriteria)
+    roles = []
+    skills = []
+    locations = []
     
-    # Ensure default roles if empty
-    if not criteria.roles:
-        criteria.roles = ["AI Engineer", "GenAI Engineer", "ML Engineer"]
-    if not criteria.skills:
-        criteria.skills = ["Python", "RAG", "LangGraph", "Agentic AI", "AWS", "LLMs"]
+    prompt_lower = prompt.lower()
+    
+    # Deterministic role extraction
+    if "agent" in prompt_lower or "agentic" in prompt_lower:
+        roles.append("Agentic AI Engineer")
+    if "genai" in prompt_lower or "generative" in prompt_lower:
+        roles.append("GenAI Engineer")
+    if "rag" in prompt_lower:
+        roles.append("RAG Engineer")
+    if "ml" in prompt_lower or "machine learning" in prompt_lower:
+        roles.append("Machine Learning Engineer")
+    if not roles or "ai engineer" in prompt_lower:
+        roles.append("AI Engineer")
 
+    # Deterministic skill extraction
+    all_known_skills = ["Python", "RAG", "LangGraph", "LangChain", "Agentic AI", "AWS", "FastAPI", "Docker", "LLMs", "Bedrock", "PostgreSQL", "Milvus"]
+    for s in all_known_skills:
+        if s.lower() in prompt_lower:
+            skills.append(s)
+    if not skills:
+        skills = ["Python", "RAG", "LangGraph", "Agentic AI", "AWS", "LLMs"]
+
+    # Location extraction
+    if "us" in prompt_lower or "usa" in prompt_lower or "united states" in prompt_lower:
+        locations.append("Remote US")
+    if "india" in prompt_lower:
+        locations.append("Remote India")
+    if not locations:
+        locations = ["Remote India", "Remote"]
+
+    criteria = SearchCriteria(
+        roles=roles,
+        skills=skills,
+        locations=locations,
+        experience_years=2.9,
+        remote_required=True
+    )
+    
     log_event(state, "Supervisor", "parse_prompt", f"Parsed search criteria for roles: {', '.join(criteria.roles)}", criteria.model_dump())
     return {
         "search_criteria": criteria.model_dump(),

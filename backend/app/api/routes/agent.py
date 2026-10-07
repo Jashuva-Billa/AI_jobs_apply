@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from app.config.database import get_db, AsyncSessionLocal
@@ -113,23 +114,39 @@ async def execute_agent_workflow(
             if canonical_id:
                 persisted_jobs_map[canonical_id] = job_entity
 
-            # Save Match
+            # Save or update Match
             match_data = j.get("match", {})
             if match_data:
-                session.add(JobMatch(
-                    job_id=job_entity.id,
-                    candidate_id=candidate_id,
-                    overall_score=match_data.get("overall_score", 0),
-                    skills_score=match_data.get("skills_score", 0),
-                    experience_score=match_data.get("experience_score", 0),
-                    location_score=match_data.get("location_score", 0),
-                    role_score=match_data.get("role_score", 0),
-                    matched_skills=match_data.get("matched_skills", []),
-                    missing_skills=match_data.get("missing_skills", []),
-                    concerns=match_data.get("concerns", []),
-                    recommendation=match_data.get("recommendation", "MATCH"),
-                    reasoning=match_data.get("reasoning")
-                ))
+                res_match = await session.execute(
+                    select(JobMatch).filter_by(job_id=job_entity.id, candidate_id=candidate_id)
+                )
+                existing_match = res_match.scalars().first()
+                if not existing_match:
+                    session.add(JobMatch(
+                        job_id=job_entity.id,
+                        candidate_id=candidate_id,
+                        overall_score=match_data.get("overall_score", 0),
+                        skills_score=match_data.get("skills_score", 0),
+                        experience_score=match_data.get("experience_score", 0),
+                        location_score=match_data.get("location_score", 0),
+                        role_score=match_data.get("role_score", 0),
+                        matched_skills=match_data.get("matched_skills", []),
+                        missing_skills=match_data.get("missing_skills", []),
+                        concerns=match_data.get("concerns", []),
+                        recommendation=match_data.get("recommendation", "MATCH"),
+                        reasoning=match_data.get("reasoning")
+                    ))
+                else:
+                    existing_match.overall_score = match_data.get("overall_score", 0)
+                    existing_match.skills_score = match_data.get("skills_score", 0)
+                    existing_match.experience_score = match_data.get("experience_score", 0)
+                    existing_match.location_score = match_data.get("location_score", 0)
+                    existing_match.role_score = match_data.get("role_score", 0)
+                    existing_match.matched_skills = match_data.get("matched_skills", [])
+                    existing_match.missing_skills = match_data.get("missing_skills", [])
+                    existing_match.concerns = match_data.get("concerns", [])
+                    existing_match.recommendation = match_data.get("recommendation", "MATCH")
+                    existing_match.reasoning = match_data.get("reasoning")
 
         # 2. Save all Application Packages and Approval Requests
         packages = final_state.get("application_packages", [])
@@ -174,33 +191,61 @@ async def execute_agent_workflow(
             rec_data = pkg.get("recruiter")
             recruiter_obj = None
             if rec_data:
-                rec_id = str(uuid.uuid4())
-                recruiter_obj = Recruiter(
-                    id=rec_id,
-                    name=rec_data.get("name", "Talent Acquisition Team"),
-                    title=rec_data.get("title", "Technical Recruiter"),
-                    company_name=rec_data.get("company_name", job_obj.company),
-                    public_email=rec_data.get("public_email"),
-                    linkedin_url=rec_data.get("linkedin_url"),
-                    source_evidence=rec_data.get("source_evidence")
+                rec_name = rec_data.get("name", "Talent Acquisition Team")
+                res_rec = await session.execute(
+                    select(Recruiter).filter_by(company_name=job_obj.company, name=rec_name)
                 )
-                session.add(recruiter_obj)
+                recruiter_obj = res_rec.scalars().first()
+                if not recruiter_obj:
+                    rec_id = str(uuid.uuid4())
+                    recruiter_obj = Recruiter(
+                        id=rec_id,
+                        name=rec_name,
+                        title=rec_data.get("title", "Technical Recruiter"),
+                        company_name=rec_data.get("company_name", job_obj.company),
+                        public_email=rec_data.get("public_email"),
+                        linkedin_url=rec_data.get("linkedin_url"),
+                        source_evidence=rec_data.get("source_evidence")
+                    )
+                    session.add(recruiter_obj)
+                else:
+                    if rec_data.get("public_email"):
+                        recruiter_obj.public_email = rec_data.get("public_email")
+                    if rec_data.get("linkedin_url"):
+                        recruiter_obj.linkedin_url = rec_data.get("linkedin_url")
 
-            # Save Application
-            app_id = str(uuid.uuid4())
+            # Save or Update Application
             app_idempotency_key = f"{candidate_id}_{job_obj.id}_apply"
-            app_entity = Application(
-                id=app_id,
-                run_id=run_id,
-                candidate_id=candidate_id,
-                job_id=job_obj.id,
-                status=ApplicationStatus.REVIEW_REQUIRED,
-                idempotency_key=app_idempotency_key,
-                notes=f"Prepared application package for {job_obj.company}"
+            res_app = await session.execute(
+                select(Application).where(
+                    (Application.idempotency_key == app_idempotency_key) |
+                    ((Application.candidate_id == candidate_id) & (Application.job_id == job_obj.id))
+                )
             )
-            session.add(app_entity)
+            app_entity = res_app.scalars().first()
+            if not app_entity:
+                app_id = str(uuid.uuid4())
+                app_entity = Application(
+                    id=app_id,
+                    run_id=run_id,
+                    candidate_id=candidate_id,
+                    job_id=job_obj.id,
+                    status=ApplicationStatus.REVIEW_REQUIRED,
+                    idempotency_key=app_idempotency_key,
+                    notes=f"Prepared application package for {job_obj.company}"
+                )
+                session.add(app_entity)
+            else:
+                app_entity.run_id = run_id
+                app_entity.idempotency_key = app_idempotency_key
+                app_entity.status = ApplicationStatus.REVIEW_REQUIRED
+                app_entity.notes = f"Prepared application package for {job_obj.company}"
+                app_entity.updated_at = datetime.utcnow()
 
-            # Save Questions
+            # Replace Questions for this application
+            await session.execute(
+                delete(ApplicationQuestion).where(ApplicationQuestion.application_id == app_entity.id)
+            )
             for q in pkg.get("questions", []):
                 session.add(ApplicationQuestion(
                     application_id=app_entity.id,
@@ -211,7 +256,10 @@ async def execute_agent_workflow(
                     status=q.get("status", "AUTO_GENERATED")
                 ))
 
-            # Save Outreach Messages
+            # Replace Outreach Messages for this application
+            await session.execute(
+                delete(OutreachMessage).where(OutreachMessage.application_id == app_entity.id)
+            )
             em_outreach = pkg.get("email_outreach")
             if em_outreach:
                 session.add(OutreachMessage(
@@ -222,6 +270,9 @@ async def execute_agent_workflow(
                     body=em_outreach.get("body", ""),
                     recipient_email=em_outreach.get("recipient_email") or (recruiter_obj.public_email if recruiter_obj else None),
                     recipient_name=em_outreach.get("recipient_name") or (recruiter_obj.name if recruiter_obj else "Hiring Team"),
+                    email_status=em_outreach.get("email_status", "NOT_FOUND"),
+                    email_source=em_outreach.get("email_source"),
+                    email_confidence=em_outreach.get("email_confidence", 0.0),
                     status="DRAFT",
                     idempotency_key=f"{candidate_id}_{job_obj.id}_email_outreach"
                 ))
@@ -239,14 +290,25 @@ async def execute_agent_workflow(
                     idempotency_key=f"{candidate_id}_{job_obj.id}_linkedin_outreach"
                 ))
 
-            # Save Approval Request
-            session.add(ApprovalRequest(
-                run_id=run_id,
-                application_id=app_entity.id,
-                status=ApprovalStatus.PENDING,
-                action_type="SUBMIT_AND_OUTREACH",
-                package_data=pkg
-            ))
+            # Save or Update Approval Request
+            res_appr = await session.execute(
+                select(ApprovalRequest).where(ApprovalRequest.application_id == app_entity.id)
+            )
+            existing_appr = res_appr.scalars().first()
+            if existing_appr:
+                existing_appr.run_id = run_id
+                existing_appr.status = ApprovalStatus.PENDING
+                existing_appr.action_type = "SUBMIT_AND_OUTREACH"
+                existing_appr.package_data = pkg
+                existing_appr.approved_at = None
+            else:
+                session.add(ApprovalRequest(
+                    run_id=run_id,
+                    application_id=app_entity.id,
+                    status=ApprovalStatus.PENDING,
+                    action_type="SUBMIT_AND_OUTREACH",
+                    package_data=pkg
+                ))
             approvals_created_count += 1
 
         # 3. Update AgentRun Record with Batch Stats

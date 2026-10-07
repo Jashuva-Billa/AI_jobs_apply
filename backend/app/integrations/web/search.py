@@ -6,8 +6,6 @@ import re
 import urllib.parse
 from app.config.settings import settings
 from app.schemas.schemas import SearchCriteria
-from app.integrations.openai.web_research import openai_web_research
-from app.integrations.openai.schemas import JobResearchResult
 
 logger = logging.getLogger(__name__)
 
@@ -169,35 +167,6 @@ CURATED_AI_JOBS = [
     }
 ]
 
-class OpenAIWebSearchProvider:
-    """Primary Web Research Provider using OpenAI Responses API + Web Search Tool."""
-
-    async def search_criteria(self, criteria: SearchCriteria) -> List[Dict[str, Any]]:
-        response = await openai_web_research.search_jobs(criteria)
-        results = []
-        for j in response.jobs:
-            if j.verification_status != "EXPIRED":
-                evidence_list = [e.model_dump() for e in j.evidence] if j.evidence else []
-                results.append({
-                    "company": j.company,
-                    "title": j.title,
-                    "location": j.location or "Remote",
-                    "remote": j.remote if j.remote is not None else True,
-                    "employment_type": j.employment_type or "Full-time",
-                    "experience_required": j.experience_required,
-                    "salary": j.salary,
-                    "description": j.description or f"Position at {j.company}",
-                    "requirements": j.responsibilities + [f"Experience in {s}" for s in j.required_skills],
-                    "skills": j.required_skills or ["Python", "AI", "LLMs"],
-                    "application_url": j.application_url or j.source_url,
-                    "source_url": j.source_url or j.application_url,
-                    "posted_date": j.posted_date,
-                    "company_url": j.company_url,
-                    "verification_status": j.verification_status,
-                    "evidence": evidence_list
-                })
-        return results
-
 class AuthorizedJobAPIProvider:
     """Live job provider fetching verified openings from public job boards (RemoteOK, Arbeitnow)."""
 
@@ -278,7 +247,7 @@ class AuthorizedJobAPIProvider:
                                 "skills": tags[:8] if tags else ["Python", "AI", "Engineering"],
                                 "application_url": app_url,
                                 "source_url": "https://www.arbeitnow.com",
-                                "posted_date": item.get("created_at", "")[:10] if item.get("created_at") else None,
+                                "posted_date": str(item.get("created_at"))[:10] if item.get("created_at") is not None else None,
                                 "company_url": "",
                                 "verification_status": "VERIFIED",
                                 "evidence": [
@@ -301,7 +270,10 @@ class WebSearchProvider:
     async def search(self, queries: List[str], locations: List[str], remote_only: bool = True) -> List[Dict[str, Any]]:
         results: List[Dict[str, Any]] = []
         try:
-            from duckduckgo_search import DDGS
+            try:
+                from ddgs import DDGS
+            except ImportError:
+                from duckduckgo_search import DDGS
             ddgs = DDGS()
             for query in queries[:3]:
                 search_term = f"{query} hiring jobs apply careers"
@@ -346,12 +318,11 @@ class WebSearchProvider:
 
 class MultiSourceJobSearchEngine:
     """
-    Orchestrates multi-source search with OpenAI Responses API + Web Search as PRIMARY,
-    falling back to Job Board APIs and DuckDuckGo when needed.
+    Orchestrates multi-source search across authorized Job Board APIs (RemoteOK, Arbeitnow)
+    and live web search (DuckDuckGo), deduplicating results and providing evidence trails.
     """
 
     def __init__(self):
-        self.openai_provider = OpenAIWebSearchProvider()
         self.api_provider = AuthorizedJobAPIProvider()
         self.web_provider = WebSearchProvider()
 
@@ -364,31 +335,30 @@ class MultiSourceJobSearchEngine:
                 all_results.append(job.copy())
             return all_results
 
-        # 1. Primary: OpenAI Responses API + Web Search
-        if criteria and settings.OPENAI_WEB_SEARCH_ENABLED:
-            try:
-                openai_jobs = await self.openai_provider.search_criteria(criteria)
-                if openai_jobs:
-                    logger.info(f"OpenAI Web Search returned {len(openai_jobs)} jobs.")
-                    all_results.extend(openai_jobs)
-            except Exception as e:
-                logger.warning(f"Primary OpenAI Web Search provider failed: {e}")
-
-        # 2. If OpenAI returned insufficient results or was skipped, query fallback live providers
-        if len(all_results) < 4:
-            logger.info("Querying auxiliary live job providers (RemoteOK, Arbeitnow, DuckDuckGo)...")
+        # 1. Query live job board APIs (RemoteOK, Arbeitnow)
+        try:
             api_jobs = await self.api_provider.search(queries, locations, remote_only)
-            all_results.extend(api_jobs)
+            if api_jobs:
+                logger.info(f"Job Board APIs returned {len(api_jobs)} listings.")
+                all_results.extend(api_jobs)
+        except Exception as e:
+            logger.warning(f"AuthorizedJobAPIProvider encountered issue: {e}")
 
+        # 2. Query DuckDuckGo web search
+        try:
             web_jobs = await self.web_provider.search(queries, locations, remote_only)
-            all_results.extend(web_jobs)
+            if web_jobs:
+                logger.info(f"DuckDuckGo search returned {len(web_jobs)} listings.")
+                all_results.extend(web_jobs)
+        except Exception as e:
+            logger.warning(f"WebSearchProvider encountered issue: {e}")
 
-            # Only add curated jobs if explicitly in demo mode
-            if settings.DEMO_MODE:
-                for job in CURATED_AI_JOBS:
-                    job_text = f"{job['title']} {job['description']} {' '.join(job['skills'])}".lower()
-                    if any(q.lower() in job_text for q in queries) or not queries:
-                        all_results.append(job.copy())
+        # 3. Include baseline verified AI jobs only when DEMO_MODE is active
+        if len(all_results) < 4 and settings.DEMO_MODE:
+            for job in CURATED_AI_JOBS:
+                job_text = f"{job['title']} {job['description']} {' '.join(job['skills'])}".lower()
+                if any(q.lower() in job_text for q in queries) or not queries:
+                    all_results.append(job.copy())
 
         return all_results
 

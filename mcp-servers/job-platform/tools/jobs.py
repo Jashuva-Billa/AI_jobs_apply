@@ -199,3 +199,50 @@ async def get_search_results(run_id: str, page: int = 1, page_size: int = 100) -
             "count": len(results),
             "results": results
         }
+
+async def get_job_details(job_id: str) -> Dict[str, Any]:
+    """
+    [READ-ONLY] Retrieve full details, description, requirements, skills, and evidence for a specific job ID.
+    """
+    async with AsyncSessionLocal() as session:
+        job = await session.get(Job, job_id)
+        if not job:
+            return {
+                "status": "NOT_FOUND",
+                "message": f"Job with ID '{job_id}' not found."
+            }
+
+        # Fetch match if available
+        m_res = await session.execute(select(JobMatch).filter_by(job_id=job_id).limit(1))
+        match_obj = m_res.scalars().first()
+
+        return {
+            "status": "FOUND",
+            "job_id": job.id,
+            "canonical_job_id": job.canonical_job_id,
+            "company": job.company,
+            "title": job.title,
+            "location": job.location,
+            "remote": job.remote,
+            "employment_type": job.employment_type,
+            "experience_required": job.experience_required,
+            "salary": job.salary,
+            "description": job.description,
+            "requirements": job.requirements or [],
+            "skills": job.skills or [],
+            "application_url": job.application_url,
+            "source_url": job.source_url,
+            "verification_status": job.verification_status,
+            "evidence": job.evidence or [],
+            "match": {
+                "overall_score": match_obj.overall_score,
+                "skills_score": match_obj.skills_score,
+                "experience_score": match_obj.experience_score,
+                "location_score": match_obj.location_score,
+                "role_score": match_obj.role_score,
+                "matched_skills": match_obj.matched_skills or [],
+                "missing_skills": match_obj.missing_skills or [],
+                "recommendation": match_obj.recommendation
+            } if match_obj else None
+        }
+

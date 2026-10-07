@@ -134,3 +134,51 @@ async def prepare_linkedin_outreach(application_id: str) -> Dict[str, Any]:
             "full_message": message_body,
             "compliance_notice": "100% LinkedIn Platform Compliant. Open direct URL and paste pre-approved note manually."
         }
+
+async def prepare_recruiter_outreach(application_id: str) -> Dict[str, Any]:
+    """
+    [READ/PREPARE] Prepares structured recruiter outreach packages (email draft + compliant LinkedIn note)
+    for a specific application ID. Does not send or dispatch anything.
+    """
+    async with AsyncSessionLocal() as session:
+        app = await session.get(Application, application_id)
+        if not app:
+            return {"status": "NOT_FOUND", "message": f"Application '{application_id}' not found."}
+
+        job = await session.get(Job, app.job_id) if app.job_id else None
+        
+        # Outreaches
+        o_res = await session.execute(select(OutreachMessage).filter_by(application_id=app.id))
+        outreaches = o_res.scalars().all()
+        email_out = next((o for o in outreaches if o.channel == "EMAIL"), None)
+        li_out = next((o for o in outreaches if o.channel == "LINKEDIN"), None)
+
+        # Recruiter
+        rec_res = await session.execute(select(Recruiter).filter_by(company_name=job.company if job else "").limit(1))
+        rec_obj = rec_res.scalars().first()
+
+        li_info = await prepare_linkedin_outreach(application_id)
+
+        return {
+            "status": "PREPARED",
+            "application_id": application_id,
+            "job": {
+                "company": job.company if job else "Company",
+                "title": job.title if job else "Role",
+                "location": job.location if job else "Remote"
+            },
+            "recruiter": {
+                "name": rec_obj.name if rec_obj else (email_out.recipient_name if email_out else "Talent Acquisition"),
+                "title": rec_obj.title if rec_obj else "Technical Recruiter",
+                "email": email_out.recipient_email if email_out else None,
+                "email_status": email_out.email_status if email_out else "NOT_FOUND",
+                "linkedin_url": rec_obj.linkedin_url if rec_obj else None
+            },
+            "email_draft": {
+                "subject": email_out.subject if email_out else f"Application for {job.title if job else 'AI Engineer'}",
+                "body": email_out.body if email_out else "",
+                "recipient_email": email_out.recipient_email if email_out else None
+            },
+            "linkedin_draft": li_info
+        }
+
