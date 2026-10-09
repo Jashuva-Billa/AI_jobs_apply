@@ -148,19 +148,32 @@ async def process_bulk_approval_decision(
 
     for app_id_item in decision.approval_ids:
         try:
-            req = await db.get(ApprovalRequest, app_id_item)
+            clean_id = str(app_id_item).strip()
+            req = await db.get(ApprovalRequest, clean_id)
             if not req:
-                results.append({"approval_id": app_id_item, "status": "FAILED", "error": "Approval request not found"})
+                r_res = await db.execute(select(ApprovalRequest).filter_by(application_id=clean_id).order_by(ApprovalRequest.created_at.desc()))
+                req = r_res.scalars().first()
+            if not req:
+                j_res = await db.get(Job, clean_id)
+                if j_res:
+                    a_res = await db.execute(select(Application).filter_by(job_id=j_res.id).order_by(Application.created_at.desc()))
+                    app_from_j = a_res.scalars().first()
+                    if app_from_j:
+                        r_res2 = await db.execute(select(ApprovalRequest).filter_by(application_id=app_from_j.id).order_by(ApprovalRequest.created_at.desc()))
+                        req = r_res2.scalars().first()
+
+            app = None
+            if req:
+                app = await db.get(Application, req.application_id)
+            else:
+                app = await db.get(Application, clean_id)
+
+            if not req and not app:
+                results.append({"approval_id": app_id_item, "status": "FAILED", "error": f"Record not found for identifier: {app_id_item}"})
                 failed_count += 1
                 continue
 
-            app = await db.get(Application, req.application_id)
-            if not app:
-                results.append({"approval_id": app_id_item, "status": "FAILED", "error": "Application not found"})
-                failed_count += 1
-                continue
-
-            job = await db.get(Job, app.job_id)
+            job = await db.get(Job, app.job_id) if (app and app.job_id) else None
 
             if decision.decision == "REJECT":
                 req.status = ApprovalStatus.REJECTED
@@ -179,36 +192,47 @@ async def process_bulk_approval_decision(
                 o_res = await db.execute(select(OutreachMessage).filter_by(application_id=app.id, channel="EMAIL"))
                 email_outreach = o_res.scalars().first()
 
-                if decision.send_email and email_outreach and email_outreach.recipient_email:
-                    target_email = email_outreach.recipient_email.strip()
-                    job_dict = {c.name: getattr(job, c.name) for c in job.__table__.columns} if job else {}
-                    
-                    is_allowed, safety_status, block_reason = validate_recipient_before_send(
-                        job_dict, target_email, email_outreach.email_status, email_outreach.email_source, app.candidate_id, app.id
-                    )
-                    
-                    if not is_allowed:
-                        email_outreach.email_status = RecipientClassification.BLOCKED_INVALID_RECIPIENT
-                        email_outreach.status = "FAILED"
-                        email_status = {"status": "BLOCKED_INVALID_RECIPIENT", "error": f"Sending blocked: {block_reason}"}
-                    else:
-                        try:
-                            email_res = await email_provider.send_email(
-                                to_email=target_email,
-                                subject=email_outreach.subject or f"Application for {job.title if job else 'Position'}",
-                                body=email_outreach.body,
-                                idempotency_key=f"{app.id}_email_approved"
-                            )
-                            email_outreach.status = "SENT"
-                            email_outreach.email_status = "VERIFIED"
-                            email_outreach.sent_at = datetime.utcnow()
-                            app.status = ApplicationStatus.RECRUITER_CONTACTED
-                            email_status = email_res
-                        except Exception as email_err:
+                if decision.send_email:
+                    if email_outreach and email_outreach.recipient_email:
+                        target_email = email_outreach.recipient_email.strip()
+                        job_dict = {c.name: getattr(job, c.name) for c in job.__table__.columns} if job else {}
+                        
+                        is_allowed, safety_status, block_reason = validate_recipient_before_send(
+                            job_dict, target_email, email_outreach.email_status, email_outreach.email_source, app.candidate_id, app.id
+                        )
+                        
+                        if not is_allowed:
+                            email_outreach.email_status = RecipientClassification.BLOCKED_INVALID_RECIPIENT
                             email_outreach.status = "FAILED"
-                            email_status = {"error": str(email_err)}
-                elif not email_outreach or not email_outreach.recipient_email:
-                    email_status = {"status": "SKIPPED_NO_RECIPIENT_EMAIL"}
+                            email_status = {"status": "BLOCKED", "reason": "BLOCKED_INVALID_RECIPIENT", "error": f"Sending blocked: {block_reason}"}
+                        else:
+                            try:
+                                email_res = await email_provider.send_email(
+                                    to_email=target_email,
+                                    subject=email_outreach.subject or f"Application for {job.title if job else 'Position'}",
+                                    body=email_outreach.body,
+                                    idempotency_key=f"{app.candidate_id}_{app.job_id}_EMAIL_OUTREACH"
+                                )
+                                email_status = email_res
+                                provider_status = (email_res or {}).get("status") if isinstance(email_res, dict) else None
+                                if provider_status == "SENT":
+                                    email_outreach.status = "SENT"
+                                    email_outreach.email_status = "VERIFIED"
+                                    email_outreach.sent_at = datetime.utcnow()
+                                    app.status = ApplicationStatus.RECRUITER_CONTACTED
+                                elif provider_status == "ALREADY_SENT":
+                                    email_outreach.status = "SENT"
+                                    email_outreach.email_status = "VERIFIED"
+                                    app.status = ApplicationStatus.RECRUITER_CONTACTED
+                                else:
+                                    email_outreach.status = "FAILED"
+                            except Exception as email_err:
+                                email_outreach.status = "FAILED"
+                                email_status = {"status": "FAILED", "error": str(email_err)}
+                    else:
+                        email_status = {"status": "BLOCKED", "reason": "NO_VERIFIED_RECIPIENT_EMAIL", "error": "Cannot dispatch outreach: No verified recipient email found."}
+                else:
+                    email_status = {"status": "SKIPPED_SEND_EMAIL_FALSE"}
 
                 # 2. Dispatch/Prepare LinkedIn Connection Request & Direct Message Outreach
                 linkedin_status = None
@@ -239,7 +263,7 @@ async def process_bulk_approval_decision(
                 results.append({
                     "approval_id": app_id_item,
                     "status": "APPROVED",
-                    "application_status": app.status.value,
+                    "application_status": app.status.value if hasattr(app.status, "value") else str(app.status),
                     "email_status": email_status,
                     "linkedin_status": linkedin_status
                 })
@@ -280,15 +304,22 @@ async def process_approval_decision(
     db: AsyncSession = Depends(get_db)
 ):
     """Process single user decision: Approve & Send, Reject, or Modify."""
-    req = await db.get(ApprovalRequest, approval_id)
+    clean_id = str(approval_id).strip()
+    req = await db.get(ApprovalRequest, clean_id)
     if not req:
-        raise HTTPException(status_code=404, detail="Approval request not found")
+        r_res = await db.execute(select(ApprovalRequest).filter_by(application_id=clean_id).order_by(ApprovalRequest.created_at.desc()))
+        req = r_res.scalars().first()
 
-    app = await db.get(Application, req.application_id)
-    if not app:
-        raise HTTPException(status_code=404, detail="Associated application not found")
+    app = None
+    if req:
+        app = await db.get(Application, req.application_id)
+    else:
+        app = await db.get(Application, clean_id)
 
-    job = await db.get(Job, app.job_id)
+    if not app and not req:
+        raise HTTPException(status_code=404, detail="Approval request or application not found")
+
+    job = await db.get(Job, app.job_id) if (app and app.job_id) else None
 
     if decision.decision == "REJECT":
         req.status = ApprovalStatus.REJECTED
@@ -318,46 +349,83 @@ async def process_approval_decision(
                 q_obj.answer = ans
                 q_obj.status = "USER_MODIFIED"
 
-    # Send Email if approved and email is present
+    # Send Email if approved and email is present. Recover email data from the
+    # approval package when the normalized OutreachMessage row is missing.
     email_status = None
     o_res = await db.execute(select(OutreachMessage).filter_by(application_id=app.id, channel="EMAIL"))
     email_outreach = o_res.scalars().first()
 
-    if decision.send_email and email_outreach:
-        if decision.modified_recipient_email:
-            email_outreach.recipient_email = decision.modified_recipient_email.strip()
-        target_email = decision.modified_recipient_email or email_outreach.recipient_email
-        subject = decision.modified_email_subject or email_outreach.subject or f"Application for {job.title if job else 'Position'}"
-        body = decision.modified_email_body or email_outreach.body
+    package_email = {}
+    if req and isinstance(req.package_data, dict):
+        package_email = req.package_data.get("email_outreach") or {}
 
-        if target_email:
+    if decision.send_email:
+        if not email_outreach and package_email.get("recipient_email"):
+            email_outreach = OutreachMessage(
+                application_id=app.id,
+                channel="EMAIL",
+                recipient_email=package_email.get("recipient_email"),
+                recipient_name=package_email.get("recipient_name") or "Hiring Team",
+                subject=package_email.get("subject") or f"Application for {job.title if job else 'Position'}",
+                body=package_email.get("body") or "",
+                email_status=package_email.get("email_status") or "VERIFIED",
+                email_source=package_email.get("email_source") or "approval_package",
+                email_confidence=package_email.get("email_confidence") or 0.0,
+                status="READY_FOR_APPROVAL"
+            )
+            db.add(email_outreach)
+            await db.flush()
+
+        if decision.modified_recipient_email and email_outreach:
+            email_outreach.recipient_email = decision.modified_recipient_email.strip()
+        target_email = decision.modified_recipient_email or (email_outreach.recipient_email if email_outreach else package_email.get("recipient_email"))
+        subject = decision.modified_email_subject or (email_outreach.subject if email_outreach else package_email.get("subject") or f"Application for {job.title if job else 'Position'}")
+        body = decision.modified_email_body or (email_outreach.body if email_outreach else package_email.get("body") or "")
+
+        if target_email and target_email.strip():
             target_email = target_email.strip()
             job_dict = {c.name: getattr(job, c.name) for c in job.__table__.columns} if job else {}
+            em_status = email_outreach.email_status if email_outreach else "UNVERIFIED"
+            em_source = email_outreach.email_source if email_outreach else "manual"
             
             is_allowed, safety_status, block_reason = validate_recipient_before_send(
-                job_dict, target_email, email_outreach.email_status, email_outreach.email_source, app.candidate_id, app.id
+                job_dict, target_email, em_status, em_source, app.candidate_id, app.id
             )
             
             if not is_allowed:
-                email_outreach.email_status = RecipientClassification.BLOCKED_INVALID_RECIPIENT
-                email_outreach.status = "FAILED"
-                email_status = {"status": "BLOCKED_INVALID_RECIPIENT", "error": f"Sending blocked: {block_reason}"}
+                if email_outreach:
+                    email_outreach.email_status = RecipientClassification.BLOCKED_INVALID_RECIPIENT
+                    email_outreach.status = "FAILED"
+                email_status = {"status": "BLOCKED", "reason": "BLOCKED_INVALID_RECIPIENT", "error": f"Sending blocked: {block_reason}"}
             else:
                 try:
                     email_result = await email_provider.send_email(
                         to_email=target_email,
                         subject=subject,
                         body=body,
-                        idempotency_key=f"{app.id}_email_approved"
+                        idempotency_key=f"{app.candidate_id}_{app.job_id}_EMAIL_OUTREACH"
                     )
-                    email_outreach.status = "SENT"
-                    email_outreach.email_status = "VERIFIED"
-                    email_outreach.sent_at = datetime.utcnow()
-                    app.status = ApplicationStatus.RECRUITER_CONTACTED
                     email_status = email_result
+                    provider_status = (email_result or {}).get("status") if isinstance(email_result, dict) else None
+                    if email_outreach and provider_status == "SENT":
+                        email_outreach.status = "SENT"
+                        email_outreach.email_status = "VERIFIED"
+                        email_outreach.sent_at = datetime.utcnow()
+                        app.status = ApplicationStatus.RECRUITER_CONTACTED
+                    elif email_outreach and provider_status == "ALREADY_SENT":
+                        email_outreach.status = "SENT"
+                        email_outreach.email_status = "VERIFIED"
+                        app.status = ApplicationStatus.RECRUITER_CONTACTED
+                    elif email_outreach:
+                        email_outreach.status = "FAILED"
                 except Exception as e:
-                    email_outreach.status = "FAILED"
-                    email_status = {"error": str(e)}
+                    if email_outreach:
+                        email_outreach.status = "FAILED"
+                    email_status = {"status": "FAILED", "error": str(e)}
+        else:
+            email_status = {"status": "BLOCKED", "reason": "NO_VERIFIED_RECIPIENT_EMAIL", "error": "Cannot dispatch outreach: No verified recipient email found."}
+    else:
+        email_status = {"status": "SKIPPED_SEND_EMAIL_FALSE"}
 
     # LinkedIn prepared action
     linkedin_action = None
@@ -383,7 +451,7 @@ async def process_approval_decision(
 
     return {
         "status": "APPROVED_AND_EXECUTED",
-        "application_status": app.status.value,
+        "application_status": app.status.value if hasattr(app.status, "value") else str(app.status),
         "email_status": email_status,
         "linkedin_action": linkedin_action
     }

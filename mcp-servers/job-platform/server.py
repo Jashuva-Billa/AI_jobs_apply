@@ -109,13 +109,16 @@ async def search_jobs(
     remote: Optional[bool] = True,
     seniority: Optional[str] = "mid",
     max_results: Optional[int] = 100,
-    candidate_id: Optional[str] = None
+    candidate_id: Optional[str] = None,
+    email_only: Optional[bool] = True
 ) -> Dict[str, Any]:
     """
     [READ/DISCOVERY] Search live job openings across RemoteOK, Arbeitnow, and DuckDuckGo career pages.
     Creates a durable SearchRun in SQL and returns structured job opportunities with source URLs.
     Supports up to 100 results (`max_results=100`).
     Never invents jobs or application links.
+    By default, returns ONLY jobs with a verified public recruiter/company email.
+    Set email_only=False only when explicitly requested.
     """
     return await _search_jobs(
         query=query,
@@ -123,7 +126,8 @@ async def search_jobs(
         remote=remote,
         seniority=seniority,
         max_results=max_results,
-        candidate_id=candidate_id
+        candidate_id=candidate_id,
+        email_only=email_only
     )
 
 @mcp.tool()

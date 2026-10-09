@@ -49,6 +49,7 @@ class OutreachGenerationService:
         subject = f"Application: {job_title} — {cand_name} ({cand_yoe} AI Engineer)"
 
         
+        outreach_status = "READY_FOR_APPROVAL" if resolution.email else "NEEDS_EMAIL_REVIEW"
         return OutreachMessageBase(
             channel="EMAIL",
             subject=subject,
@@ -58,7 +59,8 @@ class OutreachGenerationService:
             email_status=resolution.status,
             email_source=resolution.source,
             email_confidence=resolution.confidence,
-            recruiter_status=resolution.recruiter_status
+            recruiter_status=resolution.recruiter_status,
+            status=outreach_status
         )
 
     async def generate_linkedin_outreach(

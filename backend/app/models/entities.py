@@ -10,10 +10,56 @@ from app.config.database import Base
 def generate_uuid() -> str:
     return str(uuid.uuid4())
 
+from sqlalchemy.types import TypeDecorator
+
+class SafeFloat(TypeDecorator):
+    impl = String
+    cache_ok = True
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return 0.0
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            val_upper = value.strip().upper()
+            if "HIGH" in val_upper:
+                return 0.95
+            elif "MED" in val_upper:
+                return 0.75
+            elif "LOW" in val_upper:
+                return 0.50
+            try:
+                return float(value)
+            except ValueError:
+                return 0.0
+        return 0.0
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return "0.0"
+        if isinstance(value, (int, float)):
+            return str(float(value))
+        if isinstance(value, str):
+            val_upper = value.strip().upper()
+            if "HIGH" in val_upper:
+                return "0.95"
+            elif "MED" in val_upper:
+                return "0.75"
+            elif "LOW" in val_upper:
+                return "0.50"
+            try:
+                return str(float(value))
+            except ValueError:
+                return "0.0"
+        return "0.0"
+
 class ApplicationStatus(str, enum.Enum):
     DISCOVERED = "DISCOVERED"
     MATCHED = "MATCHED"
     REVIEW_REQUIRED = "REVIEW_REQUIRED"
+    READY_FOR_APPROVAL = "READY_FOR_APPROVAL"
+    PENDING_APPROVAL = "PENDING_APPROVAL"
     APPROVED = "APPROVED"
     APPLYING = "APPLYING"
     APPLIED = "APPLIED"
@@ -25,6 +71,7 @@ class ApplicationStatus(str, enum.Enum):
 
 class ApprovalStatus(str, enum.Enum):
     PENDING = "PENDING"
+    READY_FOR_APPROVAL = "READY_FOR_APPROVAL"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
     MODIFIED = "MODIFIED"
@@ -119,7 +166,7 @@ class Job(Base):
     employment_type = Column(String(128), default="Full-time")
     experience_required = Column(String(128), nullable=True)
     salary = Column(String(128), nullable=True)
-    description = Column(Text, nullable=False)
+    description = Column(Text, nullable=False, default="")
     requirements = Column(JSON, default=list)
     skills = Column(JSON, default=list)
     application_url = Column(String(1024), nullable=True)
@@ -135,7 +182,12 @@ class Job(Base):
     research_provider = Column(String(128), default="openai_web_search")
     
     created_at = Column(DateTime, default=datetime.utcnow)
-    
+
+    def __init__(self, **kwargs):
+        if "description" not in kwargs or kwargs["description"] is None:
+            kwargs["description"] = ""
+        super().__init__(**kwargs)
+
     company_rel = relationship("Company", back_populates="jobs")
     matches = relationship("JobMatch", back_populates="job", cascade="all, delete-orphan")
     applications = relationship("Application", back_populates="job", cascade="all, delete-orphan")
@@ -169,8 +221,13 @@ class Recruiter(Base):
     title = Column(String(255), default="Talent Acquisition")
     company_name = Column(String(255), nullable=False)
     public_email = Column(String(255), nullable=True)
-    linkedin_url = Column(String(1024), nullable=True)
+    email_type = Column(String(64), default="RECRUITER_SPECIFIC", nullable=True) # RECRUITER_SPECIFIC, COMPANY_RECRUITING, COMPANY_GENERAL
+    source_url = Column(String(1024), nullable=True)
+    source_type = Column(String(64), nullable=True)
     source_evidence = Column(Text, nullable=True)
+    confidence = Column(SafeFloat, default=0.0, nullable=True)
+    verified_at = Column(DateTime, nullable=True)
+    linkedin_url = Column(String(1024), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     
     company_rel = relationship("Company", back_populates="recruiters")
@@ -183,7 +240,7 @@ class Application(Base):
     run_id = Column(String(64), ForeignKey("agent_runs.id"), nullable=True, index=True)
     candidate_id = Column(String(64), ForeignKey("candidate_profiles.id"), nullable=False)
     job_id = Column(String(64), ForeignKey("jobs.id"), nullable=False)
-    status = Column(SQLEnum(ApplicationStatus), default=ApplicationStatus.DISCOVERED)
+    status = Column(String(64), default="DISCOVERED")
     idempotency_key = Column(String(255), unique=True, index=True)
     applied_at = Column(DateTime, nullable=True)
     notes = Column(Text, nullable=True)
@@ -223,7 +280,7 @@ class OutreachMessage(Base):
     recipient_name = Column(String(255), nullable=True)
     email_status = Column(String(64), default="NOT_FOUND") # VERIFIED, UNVERIFIED, NOT_FOUND, INVALID, REJECTED, BLOCKED_INVALID_RECIPIENT
     email_source = Column(String(64), nullable=True) # job_source, job_description, application_page, official_careers_page, verified_recruiter
-    email_confidence = Column(Float, default=0.0)
+    email_confidence = Column(SafeFloat, default=0.0)
     recruiter_status = Column(String(64), default="NOT_FOUND") # VERIFIED, UNVERIFIED, NOT_FOUND
     status = Column(String(64), default="DRAFT") # DRAFT, APPROVED, SENT, FAILED, MANUAL_REQUIRED
     sent_at = Column(DateTime, nullable=True)
@@ -239,7 +296,7 @@ class ApprovalRequest(Base):
     id = Column(String(64), primary_key=True, default=generate_uuid)
     run_id = Column(String(64), ForeignKey("agent_runs.id"), nullable=True, index=True)
     application_id = Column(String(64), ForeignKey("applications.id"), nullable=False)
-    status = Column(SQLEnum(ApprovalStatus), default=ApprovalStatus.PENDING)
+    status = Column(String(64), default="PENDING")
     action_type = Column(String(128), default="SUBMIT_AND_OUTREACH") # SEND_EMAIL, SUBMIT_APPLICATION, LINKEDIN_OUTREACH
     package_data = Column(JSON, default=dict)
     user_modifications = Column(JSON, default=dict)
@@ -247,6 +304,13 @@ class ApprovalRequest(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     
     application = relationship("Application", back_populates="approval_requests")
+
+    def __init__(self, **kwargs):
+        valid_cols = {c.name for c in self.__table__.columns}
+        valid_kwargs = {k: v for k, v in kwargs.items() if k in valid_cols}
+        if "approval_type" in kwargs and "action_type" not in kwargs:
+            valid_kwargs["action_type"] = kwargs["approval_type"]
+        super().__init__(**valid_kwargs)
 
 class AgentRun(Base):
     __tablename__ = "agent_runs"

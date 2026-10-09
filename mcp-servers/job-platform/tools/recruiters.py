@@ -62,7 +62,42 @@ async def find_recruiter(
             "title": recruiter_base.title if recruiter_base else "Technical Recruiting",
             "company": target_company,
             "public_email": recruiter_base.public_email if recruiter_base else None,
+            "email_type": getattr(recruiter_base, "email_type", None) if recruiter_base else None,
+            "confidence": getattr(recruiter_base, "confidence", 0.0) if recruiter_base else 0.0,
             "linkedin_url": recruiter_base.linkedin_url if recruiter_base else f"https://www.linkedin.com/search/results/people/?keywords={target_company}+technical+recruiter",
             "source_evidence": recruiter_base.source_evidence if recruiter_base else "Public talent directory",
             "verified": bool(recruiter_base and recruiter_base.public_email)
         }
+
+async def resolve_recruiter_email(
+    company_name: str,
+    email: Optional[str] = None,
+    job_id: Optional[str] = None,
+    job_title: Optional[str] = None,
+    job_url: Optional[str] = None,
+    recruiter_name: Optional[str] = None,
+    recruiter_title: Optional[str] = None,
+    source_url: Optional[str] = None,
+    source_type: Optional[str] = None,
+    evidence: Optional[str] = None,
+    confidence: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Submits, validates, and stores verified public recruiter / company email from ChatGPT research.
+    Associates the contact with the recruiter/company/job in SQL database and updates
+    pending application and outreach packages.
+    """
+    return await recruiter_service.resolve_and_persist_recruiter_email(
+        company_name=company_name,
+        email=email,
+        job_id=job_id,
+        job_title=job_title,
+        job_url=job_url,
+        recruiter_name=recruiter_name,
+        recruiter_title=recruiter_title,
+        source_url=source_url,
+        source_type=source_type,
+        evidence=evidence,
+        confidence=confidence
+    )
+

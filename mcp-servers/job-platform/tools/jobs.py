@@ -22,12 +22,16 @@ async def search_jobs(
     remote: Optional[bool] = True,
     seniority: Optional[str] = "mid",
     max_results: Optional[int] = 100,
-    candidate_id: Optional[str] = None
+    candidate_id: Optional[str] = None,
+    email_only: Optional[bool] = True
 ) -> Dict[str, Any]:
     """
     Executes live multi-source job search (RemoteOK, Arbeitnow, DuckDuckGo career pages).
     Creates a durable SearchRun in SQL and persists all discovered jobs with run_id.
     Never invents synthetic jobs.
+    If email_only=True, only jobs with a verified public recruiter/company email are
+    persisted and returned; jobs without a verified recipient are excluded before
+    application preparation.
     """
     run_id = str(uuid.uuid4())
     
@@ -65,26 +69,75 @@ async def search_jobs(
         # Execute live search & deduplication
         dedup_jobs, total_raw, duplicates_removed = await job_service.search_and_deduplicate(criteria)
         
-        # Limit to max_results if requested
-        capped_jobs = dedup_jobs[:max_results] if max_results else dedup_jobs
+        # Resolve recipient emails BEFORE persisting jobs when email_only is enabled.
+        # Jobs without a verified recipient never reach matching/application/HITL.
+        from app.services.email_resolution_service import extract_emails_from_text, verify_email_for_job, RecipientClassification, is_valid_email_format
+        from app.services.recruiter_service import KNOWN_RECRUITERS, recruiter_service
+        import asyncio
+
+        async def resolve_job_email(job: Dict[str, Any]) -> Optional[str]:
+            direct = job.get("recruiter_email") or job.get("application_email") or job.get("contact_email") or job.get("email")
+            if direct and is_valid_email_format(direct):
+                ok, cls, _, _ = verify_email_for_job(direct, job, source_type="job_source")
+                if ok and cls in (RecipientClassification.VERIFIED, RecipientClassification.DOMAIN_MATCH_ONLY):
+                    return direct.strip().lower()
+            evidence = await recruiter_service._discover_public_company_email(job)
+            return evidence["email"] if evidence else None
+
+        if email_only:
+            sem = asyncio.Semaphore(10)
+
+            async def guarded(job: Dict[str, Any]) -> tuple[Dict[str, Any], Optional[str]]:
+                async with sem:
+                    try:
+                        return job, await resolve_job_email(job)
+                    except Exception as e:
+                        logger.debug("Email-only screening failed for %s: %s", job.get("company"), e)
+                        return job, None
+
+            resolved = await asyncio.gather(*(guarded(j) for j in dedup_jobs))
+            email_jobs = []
+            for job, email in resolved:
+                if email:
+                    job = dict(job)
+                    job["recruiter_email"] = email
+                    email_jobs.append(job)
+            capped_jobs = email_jobs[:max_results] if max_results else email_jobs
+        else:
+            capped_jobs = dedup_jobs[:max_results] if max_results else dedup_jobs
 
         # Persist jobs associated with run_id in SQL
         persisted_jobs_list = []
         for j in capped_jobs:
             canonical_id = j.get("canonical_job_id") or str(uuid.uuid4())
             job_id = str(uuid.uuid4())
+            company_name = j.get("company", "Company")
+            desc_text = j.get("description", "")
+            rec_email = j.get("recruiter_email") or j.get("application_email") or j.get("contact_email")
+            if not rec_email:
+                for kn_comp, kn_data in KNOWN_RECRUITERS.items():
+                    if kn_comp.lower() == company_name.lower() or (len(company_name) > 4 and company_name.lower() in kn_comp.lower()):
+                        rec_email = kn_data.get("public_email")
+                        break
+            if not rec_email and desc_text:
+                for em in extract_emails_from_text(desc_text):
+                    is_val, classification, _, _ = verify_email_for_job(em, {"company": company_name, "company_url": j.get("company_url")})
+                    if is_val and classification in [RecipientClassification.VERIFIED, RecipientClassification.DOMAIN_MATCH_ONLY]:
+                        rec_email = em
+                        break
+
             job_entity = Job(
                 id=job_id,
                 canonical_job_id=canonical_id,
                 run_id=run_id,
-                company=j.get("company", "Company"),
+                company=company_name,
                 title=j.get("title", "Role"),
                 location=j.get("location", "Remote"),
                 remote=j.get("remote", True),
                 employment_type=j.get("employment_type", "Full-time"),
                 experience_required=j.get("experience_required", "2-3 years"),
                 salary=j.get("salary"),
-                description=j.get("description", ""),
+                description=desc_text,
                 requirements=j.get("requirements", []),
                 skills=j.get("skills", []),
                 application_url=j.get("application_url") or j.get("source_url"),
@@ -92,6 +145,7 @@ async def search_jobs(
                 source_urls=j.get("source_urls", []),
                 posted_date=j.get("posted_date"),
                 company_url=j.get("company_url"),
+                recruiter_email=rec_email,
                 verification_status=j.get("verification_status", "VERIFIED"),
                 evidence=j.get("evidence", [])
             )
@@ -111,6 +165,7 @@ async def search_jobs(
                 "application_url": job_entity.application_url,
                 "source_url": job_entity.source_url,
                 "posted_date": job_entity.posted_date,
+                "recruiter_email": rec_email,
                 "verification_status": job_entity.verification_status
             })
 

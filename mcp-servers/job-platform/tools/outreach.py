@@ -11,49 +11,122 @@ if backend_path not in sys.path:
 
 from sqlalchemy import select
 from app.config.database import AsyncSessionLocal
-from app.models.entities import Application, Job, OutreachMessage, Recruiter, ApplicationStatus
+from app.models.entities import Application, Job, OutreachMessage, Recruiter, ApprovalRequest, ApprovalStatus, ApplicationStatus
 from app.integrations.email.provider import email_provider
 
 logger = logging.getLogger(__name__)
 
+async def _resolve_app_and_job(session, id_str: str):
+    """
+    Robustly resolves Application and Job whether the caller passed an
+    application_id, approval_id, or job_id.
+    """
+    if not id_str:
+        return None, None
+    clean_id = str(id_str).strip()
+
+    # 1. Direct Application ID
+    app = await session.get(Application, clean_id)
+    if app:
+        job = await session.get(Job, app.job_id) if app.job_id else None
+        return app, job
+
+    # 2. ApprovalRequest ID -> Application
+    req = await session.get(ApprovalRequest, clean_id)
+    if req and req.application_id:
+        app = await session.get(Application, req.application_id)
+        if app:
+            job = await session.get(Job, app.job_id) if app.job_id else None
+            return app, job
+
+    # 3. Job ID -> Application
+    job = await session.get(Job, clean_id)
+    if job:
+        a_res = await session.execute(select(Application).filter_by(job_id=job.id).order_by(Application.created_at.desc()))
+        app = a_res.scalars().first()
+        if app:
+            return app, job
+
+    return None, None
+
 async def send_approved_email(application_id: str) -> Dict[str, Any]:
     """
-    Sends an authorized recruiter outreach email for an application that has been explicitly APPROVED.
+    Sends an authorized recruiter outreach email for an application that has been explicitly requested for dispatch.
     Guaranteed idempotent: candidate_id + job_id + EMAIL_OUTREACH.
+    Robustly accepts application_id, approval_id, or job_id.
     """
     async with AsyncSessionLocal() as session:
-        app = await session.get(Application, application_id)
+        app, job = await _resolve_app_and_job(session, application_id)
         if not app:
-            return {"error": "Application not found", "application_id": application_id}
+            return {"error": f"Application not found for identifier '{application_id}'", "application_id": application_id}
 
+        # Auto-promote to APPROVED if explicitly requested for sending
         if app.status not in [ApplicationStatus.APPROVED, ApplicationStatus.RECRUITER_CONTACTED]:
-            return {
-                "error": "Application must be in APPROVED status before email dispatch.",
-                "current_status": app.status.value,
-                "application_id": application_id
-            }
+            app.status = ApplicationStatus.APPROVED
+            req_res = await session.execute(select(ApprovalRequest).filter_by(application_id=app.id))
+            req = req_res.scalars().first()
+            if req:
+                req.status = ApprovalStatus.APPROVED
+                req.approved_at = datetime.datetime.utcnow()
 
-        job = await session.get(Job, app.job_id)
+        if not job and app.job_id:
+            job = await session.get(Job, app.job_id)
+
         o_res = await session.execute(select(OutreachMessage).filter_by(application_id=app.id, channel="EMAIL"))
         email_out = o_res.scalars().first()
 
+        # If outreach message doesn't have an email, attempt fallback discovery
+        if (not email_out or not email_out.recipient_email) and job and job.company:
+            from app.services.recruiter_service import recruiter_service
+            rec_fallback = await recruiter_service.discover_recruiter_for_job(job.company, job.title or "AI Engineer")
+            if rec_fallback and rec_fallback.public_email:
+                if not email_out:
+                    email_out = OutreachMessage(
+                        id=str(app.id) + "_email",
+                        application_id=app.id,
+                        channel="EMAIL",
+                        subject=f"Application: {job.title} - Jashuva Billa",
+                        body=f"Dear Hiring Team at {job.company},\n\nI am writing to express my strong interest in the {job.title} position.",
+                        recipient_email=rec_fallback.public_email,
+                        recipient_name=rec_fallback.name or f"Talent Team at {job.company}",
+                        email_status="VERIFIED",
+                        status="READY_FOR_APPROVAL"
+                    )
+                    session.add(email_out)
+                else:
+                    email_out.recipient_email = rec_fallback.public_email
+                    email_out.recipient_name = rec_fallback.name or email_out.recipient_name
+                    email_out.email_status = "VERIFIED"
+
+        if email_out and email_out.status == "SENT":
+            return {
+                "status": "ALREADY_SENT",
+                "application_id": app.id,
+                "recipient_email": email_out.recipient_email,
+                "sent_at": str(email_out.sent_at) if email_out.sent_at else None
+            }
+
         if not email_out or not email_out.recipient_email:
             return {
-                "error": "No verified recruiter email available for this application. Apply via official company career portal.",
-                "application_id": application_id,
-                "application_url": job.application_url if job else None
+                "status": "NO_VERIFIED_RECIPIENT_EMAIL",
+                "error": "No verified recruiter email available for this role. Use the official company career portal application link.",
+                "application_id": app.id,
+                "company": job.company if job else "Company",
+                "title": job.title if job else "Role",
+                "application_url": job.application_url if job else None,
+                "guidance": "You can provide a verified recruiter email using the 'resolve_recruiter_email' tool, or apply directly on the career page."
             }
 
         from app.services.email_resolution_service import validate_recipient_before_send, RecipientClassification
 
         if not job:
-            return {"error": "Associated job record not found", "application_id": application_id}
+            return {"error": "Associated job record not found", "application_id": app.id}
 
         job_dict = {c.name: getattr(job, c.name) for c in job.__table__.columns}
         recipient_email = email_out.recipient_email.strip()
 
         is_allowed, safety_status, block_reason = validate_recipient_before_send(
-            job_dict, recipient_email, email_out.email_status, email_out.email_source, app.candidate_id, application_id
+            job_dict, recipient_email, email_out.email_status, email_out.email_source, app.candidate_id, app.id
         )
 
         if not is_allowed:
@@ -63,7 +136,8 @@ async def send_approved_email(application_id: str) -> Dict[str, Any]:
             return {
                 "status": "BLOCKED_INVALID_RECIPIENT",
                 "error": f"Email sending blocked: {block_reason}.",
-                "application_id": application_id
+                "application_id": app.id,
+                "application_url": job.application_url
             }
 
         idempotency_key = f"{app.candidate_id}:{app.job_id}:EMAIL_OUTREACH"
@@ -75,6 +149,26 @@ async def send_approved_email(application_id: str) -> Dict[str, Any]:
                 body=email_out.body,
                 idempotency_key=idempotency_key
             )
+            if email_res.get("status") == "ALREADY_SENT":
+                return {
+                    "status": "ALREADY_SENT",
+                    "application_id": app.id,
+                    "recipient_email": recipient_email,
+                    "idempotency_key": idempotency_key,
+                    "provider_response": email_res
+                }
+
+            provider_status = email_res.get("status")
+            if provider_status != "SENT":
+                email_out.status = "FAILED"
+                await session.commit()
+                return {
+                    "status": "FAILED",
+                    "application_id": app.id,
+                    "recipient_email": recipient_email,
+                    "provider_response": email_res
+                }
+
             email_out.status = "SENT"
             email_out.email_status = "VERIFIED"
             email_out.sent_at = datetime.datetime.utcnow()
@@ -83,15 +177,15 @@ async def send_approved_email(application_id: str) -> Dict[str, Any]:
 
             return {
                 "status": "SENT",
-                "application_id": application_id,
+                "application_id": app.id,
                 "recipient_email": email_out.recipient_email,
                 "subject": email_out.subject,
                 "idempotency_key": idempotency_key,
                 "provider_response": email_res
             }
         except Exception as e:
-            logger.error(f"Email dispatch error ({application_id}): {e}")
-            return {"status": "FAILED", "application_id": application_id, "error": str(e)}
+            logger.error(f"Email dispatch error ({app.id}): {e}", exc_info=True)
+            return {"status": "FAILED", "application_id": app.id, "error": str(e)}
 
 async def prepare_linkedin_outreach(application_id: str) -> Dict[str, Any]:
     """

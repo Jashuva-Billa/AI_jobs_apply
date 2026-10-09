@@ -54,9 +54,9 @@ class DuplicateProtectionService:
         records = res.all()
 
         for app_rec, job_rec in records:
-            # Check ID match
             if job_id and app_rec.job_id == job_id:
-                return True, app_rec.id, f"Exact job_id '{job_id}' already has application {app_rec.id} ({app_rec.status.value})"
+                status_str = app_rec.status.value if hasattr(app_rec.status, "value") else str(app_rec.status)
+                return True, app_rec.id, f"Exact job_id '{job_id}' already has application {app_rec.id} ({status_str})"
 
             # Check Canonical ID match
             if canonical_id and job_rec.canonical_job_id == canonical_id:

@@ -830,6 +830,24 @@ elif menu == "🛡️ Human Intervention / Approval Center":
         params["run_id"] = active_run_id
         
     approvals = api_get("/approvals", params=params) or []
+
+    # Email-only queue: legacy approvals without a verified recipient are hidden.
+    # New searches are filtered earlier, before application preparation.
+    email_ready_approvals = []
+    for pkg in approvals:
+        email_out = pkg.get("email_outreach") or {}
+        recruiter_data = pkg.get("recruiter") or {}
+        package_data = pkg.get("package_data") or {}
+        packaged_email = (package_data.get("email_outreach") or {}).get("recipient_email")
+        recipient = (
+            email_out.get("recipient_email")
+            or recruiter_data.get("public_email")
+            or recruiter_data.get("email")
+            or packaged_email
+        )
+        if recipient and str(recipient).strip():
+            email_ready_approvals.append(pkg)
+    approvals = email_ready_approvals
     
     if not approvals:
         st.markdown("""
@@ -977,8 +995,32 @@ elif menu == "🛡️ Human Intervention / Approval Center":
                             "modified_linkedin_body": li_text,
                             "send_email": True
                         })
-                        st.success(f"Dispatched authorized outreach to {recruiter.get('name', 'Recruiter')} at {job.get('company')}!")
-                        time.sleep(1)
+
+                        email_result = (resp or {}).get("email_status") or {}
+                        email_state = email_result.get("status") if isinstance(email_result, dict) else None
+
+                        if email_state == "SENT":
+                            st.success(
+                                f"Email actually sent to {email_result.get('to', recip_email)} "
+                                f"for {job.get('company')}."
+                            )
+                        elif email_state == "ALREADY_SENT":
+                            st.info(
+                                f"Email was already sent for {job.get('company')} "
+                                f"(idempotency protection)."
+                            )
+                        else:
+                            error_detail = (
+                                email_result.get("error")
+                                or email_result.get("reason")
+                                or email_result.get("provider_response")
+                                or "No email was dispatched."
+                            )
+                            st.error(
+                                f"Application approved, but EMAIL WAS NOT SENT for "
+                                f"{job.get('company')}: {error_detail}"
+                            )
+                        time.sleep(2)
                         st.rerun()
                 
                 with col_rej:

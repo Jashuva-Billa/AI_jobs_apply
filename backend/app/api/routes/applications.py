@@ -44,7 +44,7 @@ async def list_applications(
             id=app.id,
             candidate_id=app.candidate_id,
             job_id=app.job_id,
-            status=app.status.value,
+            status=app.status.value if hasattr(app.status, "value") else str(app.status),
             applied_at=app.applied_at,
             notes=app.notes,
             job=JobResponse(
@@ -135,4 +135,4 @@ async def update_application_status(
 
     await db.commit()
     await db.refresh(app)
-    return {"id": app.id, "status": app.status.value, "updated_at": app.updated_at}
+    return {"id": app.id, "status": app.status.value if hasattr(app.status, "value") else str(app.status), "updated_at": app.updated_at}

@@ -154,8 +154,26 @@ async def execute_agent_workflow(
             packages = [final_state["application_package"]]
 
         approvals_created_count = 0
+        email_filtered_count = 0
         for pkg in packages:
             pkg_job_data = pkg.get("job", {})
+            pkg_email_data = pkg.get("email_outreach") or {}
+            pkg_recruiter_data = pkg.get("recruiter") or {}
+            candidate_email = (
+                pkg_email_data.get("recipient_email")
+                or pkg_recruiter_data.get("public_email")
+                or pkg_job_data.get("recruiter_email")
+                or pkg_job_data.get("application_email")
+                or pkg_job_data.get("contact_email")
+                or pkg_job_data.get("email")
+            )
+            # Email-first policy: do not create an application/HITL approval at all
+            # when there is no verified recipient email. This prevents a human
+            # approval from reaching a dead-end where SMTP can never be called.
+            if not candidate_email or not str(candidate_email).strip():
+                email_filtered_count += 1
+                continue
+
             canon = pkg_job_data.get("canonical_job_id")
             lookup_key = pkg_job_data.get("company", "") + "::" + pkg_job_data.get("title", "")
             job_obj = persisted_jobs_map.get(canon) or persisted_jobs_map.get(lookup_key)
@@ -204,13 +222,25 @@ async def execute_agent_workflow(
                         title=rec_data.get("title", "Technical Recruiter"),
                         company_name=rec_data.get("company_name", job_obj.company),
                         public_email=rec_data.get("public_email"),
-                        linkedin_url=rec_data.get("linkedin_url"),
-                        source_evidence=rec_data.get("source_evidence")
+                        email_type=rec_data.get("email_type"),
+                        source_url=rec_data.get("source_url"),
+                        source_type=rec_data.get("source_type"),
+                        source_evidence=rec_data.get("source_evidence"),
+                        confidence=rec_data.get("confidence", 0.0),
+                        verified_at=datetime.utcnow() if rec_data.get("public_email") else None,
+                        linkedin_url=rec_data.get("linkedin_url")
                     )
                     session.add(recruiter_obj)
                 else:
                     if rec_data.get("public_email"):
                         recruiter_obj.public_email = rec_data.get("public_email")
+                        recruiter_obj.email_type = rec_data.get("email_type") or recruiter_obj.email_type
+                        recruiter_obj.source_url = rec_data.get("source_url") or recruiter_obj.source_url
+                        recruiter_obj.source_type = rec_data.get("source_type") or recruiter_obj.source_type
+                        recruiter_obj.confidence = rec_data.get("confidence", recruiter_obj.confidence)
+                        recruiter_obj.verified_at = datetime.utcnow()
+                    if rec_data.get("source_evidence"):
+                        recruiter_obj.source_evidence = rec_data.get("source_evidence")
                     if rec_data.get("linkedin_url"):
                         recruiter_obj.linkedin_url = rec_data.get("linkedin_url")
 
@@ -262,18 +292,28 @@ async def execute_agent_workflow(
             )
             em_outreach = pkg.get("email_outreach")
             if em_outreach:
+                r_email = (
+                    em_outreach.get("recipient_email")
+                    or (recruiter_obj.public_email if recruiter_obj else None)
+                    or pkg_job_data.get("recruiter_email")
+                    or pkg_job_data.get("application_email")
+                    or pkg_job_data.get("contact_email")
+                    or pkg_job_data.get("email")
+                )
+                em_status = "VERIFIED" if r_email else em_outreach.get("email_status", "NOT_FOUND")
+                outreach_status = "READY_FOR_APPROVAL" if r_email else "NEEDS_EMAIL_REVIEW"
                 session.add(OutreachMessage(
                     application_id=app_entity.id,
                     recruiter_id=recruiter_obj.id if recruiter_obj else None,
                     channel="EMAIL",
                     subject=em_outreach.get("subject"),
                     body=em_outreach.get("body", ""),
-                    recipient_email=em_outreach.get("recipient_email") or (recruiter_obj.public_email if recruiter_obj else None),
+                    recipient_email=r_email,
                     recipient_name=em_outreach.get("recipient_name") or (recruiter_obj.name if recruiter_obj else "Hiring Team"),
-                    email_status=em_outreach.get("email_status", "NOT_FOUND"),
-                    email_source=em_outreach.get("email_source"),
-                    email_confidence=em_outreach.get("email_confidence", 0.0),
-                    status="DRAFT",
+                    email_status=em_status,
+                    email_source=em_outreach.get("email_source") or (recruiter_obj.source_type if recruiter_obj else None),
+                    email_confidence=em_outreach.get("email_confidence", 0.0) or (recruiter_obj.confidence if recruiter_obj else 0.0),
+                    status=outreach_status,
                     idempotency_key=f"{candidate_id}_{job_obj.id}_email_outreach"
                 ))
 
@@ -328,6 +368,13 @@ async def execute_agent_workflow(
             run_record.unique_jobs = unique_j
             run_record.qualified_jobs = qual_j
             run_record.strong_matches = strong_j
+            # Record how many candidate packages were excluded because no
+            # recipient email was available, so the run cannot imply outreach.
+            run_record.current_step = (
+                f"human_approval_gate; email_filtered={email_filtered_count}"
+                if approvals_created_count > 0
+                else f"COMPLETED; email_filtered={email_filtered_count}"
+            )
             run_record.applications_prepared = apps_prep
             run_record.approvals_pending = approvals_created_count
             run_record.applications_approved = 0

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, EmailStr
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from datetime import datetime
 
 # Candidate Schemas
@@ -127,8 +127,13 @@ class RecruiterBase(BaseModel):
     title: str = "Technical Recruiter"
     company_name: str
     public_email: Optional[str] = None
-    linkedin_url: Optional[str] = None
+    email_type: Optional[str] = None # RECRUITER_SPECIFIC, COMPANY_RECRUITING, COMPANY_GENERAL
+    source_url: Optional[str] = None
+    source_type: Optional[str] = None
     source_evidence: Optional[str] = None
+    confidence: Union[float, str] = 0.0
+    verified_at: Optional[datetime] = None
+    linkedin_url: Optional[str] = None
 
 class RecruiterResponse(RecruiterBase):
     id: str
@@ -136,6 +141,19 @@ class RecruiterResponse(RecruiterBase):
 
     class Config:
         from_attributes = True
+
+class ResolveRecruiterEmailRequest(BaseModel):
+    job_id: Optional[str] = None
+    company_name: str
+    job_title: Optional[str] = None
+    job_url: Optional[str] = None
+    recruiter_name: Optional[str] = None
+    recruiter_title: Optional[str] = None
+    email: Optional[str] = None
+    source_url: Optional[str] = None
+    source_type: Optional[str] = None
+    evidence: Optional[str] = None
+    confidence: Optional[str] = None
 
 # Outreach Schemas
 class OutreachMessageBase(BaseModel):
@@ -148,12 +166,12 @@ class OutreachMessageBase(BaseModel):
     email_source: Optional[str] = None # job_source, job_description, application_page, official_careers_page, verified_recruiter
     email_confidence: float = 0.0
     recruiter_status: str = "NOT_FOUND" # VERIFIED, UNVERIFIED, NOT_FOUND
+    status: str = "DRAFT"
 
 class OutreachMessageResponse(OutreachMessageBase):
     id: str
     application_id: str
     recruiter_id: Optional[str] = None
-    status: str
     sent_at: Optional[datetime] = None
     created_at: datetime
 
@@ -172,6 +190,8 @@ class ApplicationQuestionSchema(BaseModel):
 # Application Package for Approval
 class ApplicationPackage(BaseModel):
     application_id: Optional[str] = None
+    job_id: Optional[str] = None
+    status: str = "READY"
     job: Optional[JobResponse] = None
     match: Optional[MatchBreakdown] = None
     recruiter: Optional[RecruiterResponse] = None

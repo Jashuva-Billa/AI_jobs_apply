@@ -31,13 +31,13 @@ class EmailProvider(Protocol):
 _SENT_IDEMPOTENCY_KEYS = set()
 
 class SMTPEmailProvider:
-    """Standard SMTP Email Provider for verified sending with OAuth / TLS support."""
+    """SMTP email provider. Real delivery is required outside tests."""
     def __init__(self):
         self.host = settings.SMTP_HOST
         self.port = settings.SMTP_PORT
         self.user = settings.SMTP_USER
         self.password = settings.SMTP_PASSWORD
-        self.sender = settings.EMAIL_FROM
+        self.sender = settings.EMAIL_FROM if settings.EMAIL_FROM != "candidate@example.com" else (settings.SMTP_USER or settings.EMAIL_FROM)
         self._sent_keys = _SENT_IDEMPOTENCY_KEYS
 
     async def search_emails(self, query: str, max_results: int = 10) -> List[Dict[str, Any]]:
@@ -66,8 +66,7 @@ class SMTPEmailProvider:
             }
 
         is_testing = bool(os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TESTING"))
-        
-        # If SMTP settings are fully configured and not in unit testing mode, send through SMTP
+
         if self.host and self.user and self.password and not is_testing:
             try:
                 msg = MIMEMultipart()
@@ -77,10 +76,12 @@ class SMTPEmailProvider:
                 msg.attach(MIMEText(body, "plain"))
 
                 server = smtplib.SMTP(self.host, self.port)
-                server.starttls()
-                server.login(self.user, self.password)
-                server.send_message(msg)
-                server.quit()
+                try:
+                    server.starttls()
+                    server.login(self.user, self.password)
+                    server.send_message(msg)
+                finally:
+                    server.quit()
 
                 if idempotency_key:
                     self._sent_keys.add(idempotency_key)
@@ -93,22 +94,24 @@ class SMTPEmailProvider:
                     "sent_at": datetime.utcnow().isoformat()
                 }
             except Exception as e:
-                logger.error(f"SMTP dispatch failed ({e}). Falling back to Sandbox mode.")
-                if not is_testing and settings.ENVIRONMENT == "production":
-                    raise RuntimeError(f"SMTP dispatch failed: {e}")
+                logger.error(f"SMTP dispatch failed: {e}")
+                raise RuntimeError(f"Real email delivery failed: {e}") from e
 
-        # Local development / Sandbox mode
-        if idempotency_key:
-            self._sent_keys.add(idempotency_key)
+        if is_testing:
+            if idempotency_key:
+                self._sent_keys.add(idempotency_key)
+            return {
+                "status": "SENT",
+                "mode": "TEST_ONLY_NOT_DELIVERED",
+                "to": to_email,
+                "subject": subject,
+                "sent_at": datetime.utcnow().isoformat(),
+                "idempotency_key": idempotency_key
+            }
 
-        logger.info(f"[SANDBOX EMAIL DISPATCHED] To: {to_email} | Subject: {subject}")
-        return {
-            "status": "SENT",
-            "mode": "SANDBOX_VERIFIED",
-            "to": to_email,
-            "subject": subject,
-            "sent_at": datetime.utcnow().isoformat(),
-            "idempotency_key": idempotency_key
-        }
+        raise RuntimeError(
+            "Real email delivery is not configured. "
+            "Set SMTP_HOST, SMTP_USER, SMTP_PASSWORD and EMAIL_FROM in .env."
+        )
 
 email_provider = SMTPEmailProvider()

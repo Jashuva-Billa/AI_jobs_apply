@@ -79,6 +79,7 @@ class RecipientClassification:
 class EmailResolutionResult(BaseModel):
     email: Optional[str] = None
     status: str = RecipientClassification.NOT_FOUND # VERIFIED, DOMAIN_MATCH_ONLY, UNVERIFIED, NOT_FOUND, REJECTED
+    email_type: Optional[str] = "COMPANY_RECRUITING"
     source: Optional[str] = None # job_source, job_description, application_page, official_careers_page, verified_recruiter, manual
     source_url: Optional[str] = None
     company: str = ""

@@ -132,13 +132,52 @@ async def seed_initial_data():
                 ))
 
             await session.commit()
-            logger.info("Database initialized and seeded successfully.")
+async def run_safe_migrations():
+    """Safely adds missing columns to existing tables without dropping or deleting data."""
+    async with engine.begin() as conn:
+        from sqlalchemy import text
+        dialect_name = conn.dialect.name
+        if dialect_name == "mysql":
+            columns_to_add = [
+                ("recruiters", "email_type", "VARCHAR(50) DEFAULT 'COMPANY_RECRUITING'"),
+                ("recruiters", "source_url", "VARCHAR(500) NULL"),
+                ("recruiters", "source_type", "VARCHAR(100) DEFAULT 'PUBLIC_SOURCE'"),
+                ("recruiters", "source_evidence", "TEXT NULL"),
+                ("recruiters", "confidence", "VARCHAR(20) DEFAULT 'MEDIUM'"),
+                ("recruiters", "verified_at", "DATETIME NULL"),
+            ]
+            for table_name, col_name, col_def in columns_to_add:
+                try:
+                    check_sql = text(
+                        "SELECT COUNT(*) FROM information_schema.columns "
+                        "WHERE table_schema = DATABASE() AND table_name = :t AND column_name = :c"
+                    )
+                    res = await conn.execute(check_sql, {"t": table_name, "c": col_name})
+                    if res.scalar() == 0:
+                        logger.info(f"Adding missing column {col_name} to {table_name}")
+                        await conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_def}"))
+                except Exception as e:
+                    logger.warning(f"Migration error checking/adding {col_name} on {table_name}: {e}")
+        elif dialect_name == "sqlite":
+            for col_name, col_def in [
+                ("email_type", "VARCHAR(50) DEFAULT 'COMPANY_RECRUITING'"),
+                ("source_url", "VARCHAR(500) NULL"),
+                ("source_type", "VARCHAR(100) DEFAULT 'PUBLIC_SOURCE'"),
+                ("source_evidence", "TEXT NULL"),
+                ("confidence", "VARCHAR(20) DEFAULT 'MEDIUM'"),
+                ("verified_at", "DATETIME NULL"),
+            ]:
+                try:
+                    await conn.execute(text(f"ALTER TABLE recruiters ADD COLUMN {col_name} {col_def}"))
+                except Exception:
+                    pass
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Initialize tables
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    await run_safe_migrations()
     await seed_initial_data()
     yield
 

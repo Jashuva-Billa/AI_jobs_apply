@@ -179,7 +179,7 @@ async def rank_jobs_node(state: JobApplicationState) -> Dict[str, Any]:
 async def discover_recruiters_node(state: JobApplicationState) -> Dict[str, Any]:
     strong_matches = state.get("strong_matches", [])
     if not strong_matches:
-        strong_matches = state.get("qualified_jobs", [])[:5]
+        strong_matches = state.get("qualified_jobs", []) or state.get("matched_jobs", []) or state.get("search_results", [])
     
     recruiter_map: Dict[str, Dict[str, Any]] = {}
     sem = asyncio.Semaphore(settings.MAX_CONCURRENT_RECRUITER_RESEARCH)
@@ -191,7 +191,7 @@ async def discover_recruiters_node(state: JobApplicationState) -> Dict[str, Any]
             return
         async with sem:
             try:
-                rec = await recruiter_service.discover_recruiter_for_job(company_name=company, job_title=title)
+                rec = await recruiter_service.discover_recruiter_for_job(job)
                 if rec:
                     recruiter_map[company] = rec.model_dump()
             except Exception as e:
@@ -201,7 +201,7 @@ async def discover_recruiters_node(state: JobApplicationState) -> Dict[str, Any]
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    top_job = state.get("selected_job")
+    top_job = state.get("selected_job") or (strong_matches[0] if strong_matches else None)
     top_recruiter = recruiter_map.get(top_job.get("company")) if top_job else None
 
     log_event(
@@ -214,6 +214,7 @@ async def discover_recruiters_node(state: JobApplicationState) -> Dict[str, Any]
     return {
         "recruiter_map": recruiter_map,
         "recruiter": top_recruiter,
+        "recruiters": list(recruiter_map.values()),
         "current_step": "discover_recruiters"
     }
 
@@ -222,7 +223,7 @@ async def prepare_application_node(state: JobApplicationState) -> Dict[str, Any]
     qualified = state.get("qualified_jobs", [])
     if not qualified:
         # Fallback to ranked jobs or selected_job if qualified is empty
-        qualified = state.get("ranked_jobs", [])
+        qualified = state.get("ranked_jobs", []) or state.get("matched_jobs", []) or state.get("search_results", [])
         if not qualified and state.get("selected_job"):
             qualified = [state["selected_job"]]
 
@@ -233,7 +234,10 @@ async def prepare_application_node(state: JobApplicationState) -> Dict[str, Any]
     async def prepare_single_job_package(idx: int, job: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         async with sem:
             try:
-                match = MatchBreakdown(**job["match"])
+                if job.get("match"):
+                    match = MatchBreakdown(**job["match"])
+                else:
+                    match = matching_service.evaluate_match(cand, job)
                 tailored_res = await application_service.tailor_resume(cand, job, match)
                 cover_letter = await application_service.generate_cover_letter(cand, job, match)
                 questions = application_service.prepare_application_questions(cand, job)
@@ -302,6 +306,8 @@ async def prepare_outreach_node(state: JobApplicationState) -> Dict[str, Any]:
     )
     return {
         "outreach": outreach,
+        "outreach_packages": [outreach],
+        "outreach_package": outreach,
         "approval_required": True,
         "approval_status": "PENDING",
         "current_step": "human_approval_gate"
@@ -311,13 +317,16 @@ async def execute_approved_action_node(state: JobApplicationState) -> Dict[str, 
     if state.get("approval_status") == "APPROVED":
         email_data = state.get("outreach", {}).get("email")
         if email_data and email_data.get("recipient_email"):
-            await email_provider.send_email(
+            email_result = await email_provider.send_email(
                 to_email=email_data["recipient_email"],
                 subject=email_data["subject"],
                 body=email_data["body"],
                 idempotency_key=f"{state.get('run_id')}_email"
             )
-            log_event(state, "EmailMCP", "send_email", f"Dispatched authorized outreach email to {email_data['recipient_email']}")
+            if email_result.get("status") == "SENT":
+                log_event(state, "EmailMCP", "send_email", f"Dispatched authorized outreach email to {email_data['recipient_email']}")
+            else:
+                log_event(state, "EmailMCP", "send_email_failed", f"Email was not sent to {email_data['recipient_email']}: {email_result}")
     return {
         "current_step": "execute_approved_action"
     }
@@ -327,3 +336,9 @@ async def track_application_node(state: JobApplicationState) -> Dict[str, Any]:
     return {
         "current_step": "COMPLETED"
     }
+
+# Backward compatible node aliases
+candidate_node = load_candidate_node
+recruiter_node = discover_recruiters_node
+application_node = prepare_application_node
+outreach_node = prepare_outreach_node

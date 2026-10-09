@@ -28,12 +28,34 @@ async def _prepare_single_application_task(
     cand_schema: CandidateProfileBase,
     job_entity: Job,
     run_id: Optional[str],
-    semaphore: asyncio.Semaphore
+    semaphore: asyncio.Semaphore,
+    recruiter_email: Optional[str] = None,
+    recruiter_name: Optional[str] = None,
+    recruiter_title: Optional[str] = None,
+    source_url: Optional[str] = None,
+    evidence: Optional[str] = None
 ) -> Dict[str, Any]:
     """Prepares a single application package under bounded concurrency."""
     async with semaphore:
         async with AsyncSessionLocal() as session:
             try:
+                # If explicit recruiter email provided, persist it first
+                if recruiter_email and recruiter_email.strip():
+                    await recruiter_service.resolve_and_persist_recruiter_email(
+                        company_name=job_entity.company,
+                        email=recruiter_email.strip(),
+                        job_id=job_entity.id,
+                        job_title=job_entity.title,
+                        job_url=job_entity.application_url or source_url or job_entity.source_url,
+                        recruiter_name=recruiter_name,
+                        recruiter_title=recruiter_title or "Technical Recruiter",
+                        source_url=source_url or job_entity.source_url or job_entity.application_url,
+                        source_type="COMPANY_CAREERS_PAGE",
+                        evidence=evidence or f"Recruiter contact supplied during application preparation for {job_entity.company}",
+                        confidence="HIGH"
+                    )
+                    job_entity.recruiter_email = recruiter_email.strip().lower()
+
                 job_dict = {c.name: getattr(job_entity, c.name) for c in job_entity.__table__.columns}
                 
                 # Check for Duplicate Application
@@ -56,7 +78,7 @@ async def _prepare_single_application_task(
                 r_res = await session.execute(select(Recruiter).filter_by(company_name=job_entity.company).limit(1))
                 rec_entity = r_res.scalars().first()
                 if not rec_entity:
-                    rec_base = await recruiter_service.discover_recruiter_for_job(job_entity.company, job_entity.title)
+                    rec_base = await recruiter_service.discover_recruiter_for_job(job_dict, job_entity.title)
                     if rec_base:
                         rec_entity = Recruiter(
                             id=str(uuid.uuid4()),
@@ -318,11 +340,17 @@ async def _prepare_single_application_task(
 async def prepare_application(
     candidate_id: Optional[str] = None,
     job_id: str = "",
-    run_id: Optional[str] = None
+    run_id: Optional[str] = None,
+    recruiter_email: Optional[str] = None,
+    recruiter_name: Optional[str] = None,
+    recruiter_title: Optional[str] = None,
+    source_url: Optional[str] = None,
+    evidence: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Prepares a single complete factual application package (tailored resume, cover letter,
     application answers, email outreach, and LinkedIn outreach) and inserts an ApprovalRequest.
+    Optionally accepts recruiter contact details directly to resolve or update recruiter email.
     """
     async with AsyncSessionLocal() as session:
         if candidate_id:
@@ -352,7 +380,17 @@ async def prepare_application(
         cand_dict = {c.name: getattr(cand, c.name) for c in cand.__table__.columns}
         cand_schema = CandidateProfileResponse.model_validate(cand_dict)
         sem = asyncio.Semaphore(1)
-        result = await _prepare_single_application_task(cand_schema, job, run_id, sem)
+        result = await _prepare_single_application_task(
+            cand_schema,
+            job,
+            run_id,
+            sem,
+            recruiter_email=recruiter_email,
+            recruiter_name=recruiter_name,
+            recruiter_title=recruiter_title,
+            source_url=source_url,
+            evidence=evidence
+        )
         return result
 
 async def prepare_applications_batch(
@@ -425,8 +463,21 @@ async def get_application_status(application_id: str) -> Dict[str, Any]:
         }
 
     async with AsyncSessionLocal() as session:
-        # 1. Fetch Application entity
-        app = await session.get(Application, application_id)
+        clean_id = str(application_id).strip()
+        # 1. Fetch Application entity directly
+        app = await session.get(Application, clean_id)
+        if not app:
+            # Try via ApprovalRequest ID
+            req = await session.get(ApprovalRequest, clean_id)
+            if req and req.application_id:
+                app = await session.get(Application, req.application_id)
+        if not app:
+            # Try via Job ID
+            job_cand = await session.get(Job, clean_id)
+            if job_cand:
+                a_res = await session.execute(select(Application).filter_by(job_id=job_cand.id).order_by(Application.created_at.desc()))
+                app = a_res.scalars().first()
+
         if not app:
             return {
                 "status": "NOT_FOUND",
@@ -620,7 +671,18 @@ async def get_application(application_id: str) -> Dict[str, Any]:
     answers, recruiter details, and approval record for a specific application ID.
     """
     async with AsyncSessionLocal() as session:
-        app = await session.get(Application, application_id)
+        clean_id = str(application_id).strip()
+        app = await session.get(Application, clean_id)
+        if not app:
+            req = await session.get(ApprovalRequest, clean_id)
+            if req and req.application_id:
+                app = await session.get(Application, req.application_id)
+        if not app:
+            job_cand = await session.get(Job, clean_id)
+            if job_cand:
+                a_res = await session.execute(select(Application).filter_by(job_id=job_cand.id).order_by(Application.created_at.desc()))
+                app = a_res.scalars().first()
+
         if not app:
             return {"status": "NOT_FOUND", "message": f"Application '{application_id}' not found."}
 

@@ -86,7 +86,7 @@ async def list_jobs(
                 "linkedin_url": rec_obj.linkedin_url
             } if rec_obj else None,
             application_id=app_obj.id if app_obj else None,
-            status=app_obj.status.value if app_obj else None
+            status=app_obj.status.value if (app_obj and hasattr(app_obj.status, "value")) else (str(app_obj.status) if app_obj else None)
         ))
 
     # Sort descending by match score if available

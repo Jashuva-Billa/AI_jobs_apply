@@ -244,6 +244,7 @@ class ApplicationPackageService:
 
         return ApplicationPackage(
             application_id=job.get("application_id"),
+            job_id=job.get("id"),
             job=job_dto,
             match=match,
             recruiter=rec_dto,
@@ -253,5 +254,7 @@ class ApplicationPackageService:
             cover_letter=cover_letter,
             questions=questions
         )
+
+    prepare_application_package = prepare_full_package
 
 application_service = ApplicationPackageService()

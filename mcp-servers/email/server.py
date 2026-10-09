@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
 Email MCP Server
-Exposes tools for draft generation and authorized email dispatching with idempotency protection.
+Exposes tools for draft generation and authorized email dispatching with real SMTP delivery.
 """
 import sys
 import json
 import asyncio
+import os
+import smtplib
+from email.mime.text import MIMEText
 
 async def handle_tool_call(name: str, arguments: dict):
     if name == "create_draft":
@@ -15,13 +18,47 @@ async def handle_tool_call(name: str, arguments: dict):
             "subject": arguments.get("subject")
         }
     elif name == "send_email":
-        # Requires human approval
-        return {
-            "status": "SENT",
-            "to": arguments.get("to_email"),
-            "subject": arguments.get("subject"),
-            "idempotency_key": arguments.get("idempotency_key")
-        }
+        # Requires human approval. Never report SENT unless SMTP accepted the message.
+        host = os.getenv("SMTP_HOST")
+        port = int(os.getenv("SMTP_PORT", "587"))
+        user = os.getenv("SMTP_USER")
+        password = os.getenv("SMTP_PASSWORD")
+        sender = os.getenv("EMAIL_FROM") or user
+
+        if not (host and user and password and sender):
+            return {
+                "status": "NOT_SENT",
+                "reason": "SMTP_NOT_CONFIGURED",
+                "to": arguments.get("to_email")
+            }
+
+        msg = MIMEText(arguments.get("body", ""), "plain")
+        msg["From"] = sender
+        msg["To"] = arguments.get("to_email")
+        msg["Subject"] = arguments.get("subject", "")
+
+        try:
+            server = smtplib.SMTP(host, port, timeout=20)
+            try:
+                server.starttls()
+                server.login(user, password)
+                server.send_message(msg)
+            finally:
+                server.quit()
+
+            return {
+                "status": "SENT",
+                "to": arguments.get("to_email"),
+                "subject": arguments.get("subject"),
+                "idempotency_key": arguments.get("idempotency_key")
+            }
+        except Exception as exc:
+            return {
+                "status": "FAILED",
+                "to": arguments.get("to_email"),
+                "error": str(exc)
+            }
+
     raise ValueError(f"Unknown tool: {name}")
 
 def main():
@@ -35,7 +72,7 @@ def main():
             req_id = request.get("id")
             method = request.get("method")
             params = request.get("params", {})
-            
+
             if method == "tools/list":
                 response = {
                     "jsonrpc": "2.0",
@@ -80,15 +117,26 @@ def main():
                 response = {
                     "jsonrpc": "2.0",
                     "id": req_id,
-                    "result": {"content": [{"type": "text", "text": json.dumps(result)}]}
+                    "result": {
+                        "content": [
+                            {"type": "text", "text": json.dumps(result)}
+                        ]
+                    }
                 }
             else:
-                response = {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": "Method not found"}}
-            
-            sys.stdout.write(json.dumps(response) + "\n")
-            sys.stdout.flush()
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {"code": -32601, "message": "Method not found"}
+                }
+
+            print(json.dumps(response), flush=True)
         except Exception as e:
-            sys.stderr.write(f"Error: {e}\n")
+            print(json.dumps({
+                "jsonrpc": "2.0",
+                "id": req_id if "req_id" in locals() else None,
+                "error": {"code": -32000, "message": str(e)}
+            }), flush=True)
 
 if __name__ == "__main__":
     main()
